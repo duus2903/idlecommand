@@ -12,9 +12,30 @@ IdleCommand is **not** a traditional idle game, city builder, productivity dashb
 
 The player does not micromanage villagers, click for resources, optimize production chains, or return because of guilt. The player observes a world that continues without them and gradually becomes attached to its people, places, memories, and history.
 
-## North Star
+## Current playable whitebox
 
-When the player glances at the bottom of the desktop, there should be a genuine chance that something meaningful has changed because the world has continued living.
+The first living camp prototype now includes:
+
+- Nora, Otto, and Milo the dog
+- autonomous wandering, branch gathering, fire tending, resting, following, sheltering, and sleeping
+- a continuous three-minute day/night cycle
+- changing rain weather
+- a tent and campfire
+- subtle emergent story messages rather than a permanent HUD
+- local save state and offline world-time progression
+- a wide 1280 × 360 desktop-strip presentation
+
+The visuals are deliberately code-drawn placeholders. This milestone tests whether the world feels alive before final pixel art and desktop-window integration are added.
+
+## Run it
+
+1. Install Godot 4.3 or newer.
+2. Clone this repository.
+3. Import `project.godot` in Godot.
+4. Press **F6/F5**.
+5. Do not control anything. Let the camp live for at least ten minutes.
+
+The save file is stored by Godot at `user://idlecommand_save.cfg` and updates when a new in-world day begins or the window closes.
 
 ## Foundation documents
 
@@ -26,25 +47,12 @@ The project's source of truth lives in [`docs/foundation`](docs/foundation):
 
 Every feature, asset, system, and technical decision must be evaluated against these documents.
 
-## Current scope
+## Acceptance test
 
-The first playable experience contains only:
+The whitebox succeeds when a person can leave it running, glance back later, and notice a small believable situation without having issued a command.
 
-- Nora
-- Otto
-- one dog
-- one tent
-- one campfire
-- a quiet natural environment
-- day, night, and simple weather
-- autonomous everyday behaviour
-
-If this tiny world is comforting and interesting before progression systems are added, the foundation works.
+Examples include Otto returning with branches, Milo following Nora through the rain, or everyone gathering near the fire after dark.
 
 ## Guiding principle
 
 > **IdleCommand is not trying to steal your attention. It is trying to deserve it.**
-
-## Status
-
-Foundation phase. The previous prototype has been retired so the project can restart around the living-world desktop-companion vision.
