@@ -51,7 +51,7 @@ func _style_ui() -> void:
     panel.border_color = Color("#456454")
     panel.set_border_width_all(2)
     panel.set_corner_radius_all(18)
-    %StatusCard.add_theme_stylebox_override("panel", panel)
+    $StatusCard.add_theme_stylebox_override("panel", panel)
 
     var button := StyleBoxFlat.new()
     button.bg_color = Color("#315f43")
