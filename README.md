@@ -1,31 +1,50 @@
 # IdleCommand
 
-IdleCommand er et hyggeligt desktop-idle-spil og en kommende visuel companion til GitHub- og agentarbejde.
+> **A tiny world that keeps living while you live yours.**
 
-## Første prototype
+IdleCommand is a calm, living desktop companion: a tiny autonomous society that exists along the bottom of the desktop while the player works, waits, creates, and lives.
 
-Den første vertical slice simulerer et komplet arbejdsflow:
+It is not designed to steal attention. It is designed to deserve it.
 
-1. En opgave ankommer.
-2. Kode-Kaj arbejder.
-3. Test-Tove tester.
-4. Opgaven består eller fejler.
-5. Ved succes leveres pakken, og Carsten fejrer.
+## Product identity
 
-## Teknologi
+IdleCommand is **not** a traditional idle game, city builder, productivity dashboard, or resource-management game.
 
-- Godot 4.x
-- GDScript
-- Windows først
-- Senere: transparent vindue, always-on-top og GitHub-integration
+The player does not micromanage villagers, click for resources, optimize production chains, or return because of guilt. The player observes a world that continues without them and gradually becomes attached to its people, places, memories, and history.
 
-## Sådan åbnes projektet
+## North Star
 
-1. Installer Godot 4.x.
-2. Klon eller download dette repository.
-3. Åbn `project.godot` i Godot.
-4. Tryk **F6/F5** for at køre prototypen.
+When the player glances at the bottom of the desktop, there should be a genuine chance that something meaningful has changed because the world has continued living.
+
+## Foundation documents
+
+The project's source of truth lives in [`docs/foundation`](docs/foundation):
+
+- [Game Design Bible](docs/foundation/GAME_DESIGN_BIBLE.md)
+- [Design Authority](docs/foundation/DESIGN_AUTHORITY.md)
+- [Milestone 0.0.1 — The Camp](roadmap/M0_THE_CAMP.md)
+
+Every feature, asset, system, and technical decision must be evaluated against these documents.
+
+## Current scope
+
+The first playable experience contains only:
+
+- Nora
+- Otto
+- one dog
+- one tent
+- one campfire
+- a quiet natural environment
+- day, night, and simple weather
+- autonomous everyday behaviour
+
+If this tiny world is comforting and interesting before progression systems are added, the foundation works.
+
+## Guiding principle
+
+> **IdleCommand is not trying to steal your attention. It is trying to deserve it.**
 
 ## Status
 
-Tidlig prototype. Grafikken er foreløbig bygget med simple former og tekst, så gameplay-loopet kan testes før de endelige assets implementeres.
+Foundation phase. The previous prototype has been retired so the project can restart around the living-world desktop-companion vision.
