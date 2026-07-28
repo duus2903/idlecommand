@@ -99,10 +99,12 @@ func _advance_agents(delta: float) -> void:
             var speed := 54.0 if agent.dog else 38.0
             agent.pos += direction * speed * delta
         elif agent.decision <= 0.0:
+            agents[i] = agent
             _choose_action(i)
+            agent = agents[i]
 
-        _apply_arrival(i, delta)
         agents[i] = agent
+        _apply_arrival(i, delta)
 
 func _choose_action(index: int) -> void:
     var agent := agents[index]
