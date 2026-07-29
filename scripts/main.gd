@@ -1,5 +1,5 @@
 Exit code: 0
-Wall time: 0.9 seconds
+Wall time: 0.3 seconds
 Output:
 extends Node2D
 
@@ -13,31 +13,46 @@ const BRANCH_POSITIONS := [Vector2(215, 329), Vector2(350, 331), Vector2(1110, 3
 const CAMP_BACKGROUND := preload("res://assets/camp_sunset.png")
 const NORA_SPRITES := {
     "idle": preload("res://assets/sprites/nora_idle.png"),
-    "walk": preload("res://assets/sprites/nora_walk.png"),
     "sit": preload("res://assets/sprites/nora_sit.png"),
     "warm": preload("res://assets/sprites/nora_warm.png"),
     "sleep": preload("res://assets/sprites/nora_sleep.png")
 }
 const OTTO_SPRITES := {
     "idle": preload("res://assets/sprites/otto_idle.png"),
-    "walk": preload("res://assets/sprites/otto_walk.png"),
     "sit": preload("res://assets/sprites/otto_sit.png"),
     "tend": preload("res://assets/sprites/otto_tend.png"),
     "sleep": preload("res://assets/sprites/otto_sleep.png")
 }
 const MILO_SPRITES := {
     "idle": preload("res://assets/sprites/milo_stand.png"),
-    "walk": preload("res://assets/sprites/milo_trot.png"),
     "sit": preload("res://assets/sprites/milo_sit.png"),
     "rest": preload("res://assets/sprites/milo_rest.png"),
     "sleep": preload("res://assets/sprites/milo_sleep.png")
 }
-const FIRE_FRAMES := [
-    preload("res://assets/sprites/fire_0.png"),
-    preload("res://assets/sprites/fire_1.png"),
-    preload("res://assets/sprites/fire_2.png"),
-    preload("res://assets/sprites/fire_3.png"),
-    preload("res://assets/sprites/fire_4.png")
+const NORA_WALK_FRAMES := [
+    preload("res://assets/sprites/nora_walk_0.png"),
+    preload("res://assets/sprites/nora_walk_1.png"),
+    preload("res://assets/sprites/nora_walk_2.png"),
+    preload("res://assets/sprites/nora_walk_3.png")
+]
+const OTTO_WALK_FRAMES := [
+    preload("res://assets/sprites/otto_walk_0.png"),
+    preload("res://assets/sprites/otto_walk_1.png"),
+    preload("res://assets/sprites/otto_walk_2.png"),
+    preload("res://assets/sprites/otto_walk_3.png")
+]
+const MILO_WALK_FRAMES := [
+    preload("res://assets/sprites/milo_walk_0.png"),
+    preload("res://assets/sprites/milo_walk_1.png"),
+    preload("res://assets/sprites/milo_walk_2.png"),
+    preload("res://assets/sprites/milo_walk_3.png")
+]
+const FIRE_BASE := preload("res://assets/sprites/fire_base.png")
+const FLAME_FRAMES := [
+    preload("res://assets/sprites/flame_0.png"),
+    preload("res://assets/sprites/flame_1.png"),
+    preload("res://assets/sprites/flame_2.png"),
+    preload("res://assets/sprites/flame_3.png")
 ]
 
 var world_time := 0.92
@@ -120,12 +135,27 @@ func _advance_weather(delta: float) -> void:
     if raining:
         raining = false
         weather_timer = rng.randf_range(35.0, 70.0)
+        _release_shelter()
         _say("Regnen stilner af. Dråberne hænger endnu i græsset.")
     else:
         raining = rng.randf() < 0.42
         weather_timer = rng.randf_range(22.0, 55.0)
         if raining:
+            _send_everyone_to_shelter()
             _say("En stille regn glider ind over lejren.")
+
+func _send_everyone_to_shelter() -> void:
+    var shelter_offsets := [Vector2(-14,12),Vector2(8,12),Vector2(28,16)]
+    for i in range(agents.size()):
+        agents[i].state = "shelter"
+        agents[i].target = TENT_POS + shelter_offsets[i]
+        agents[i].decision = weather_timer
+
+func _release_shelter() -> void:
+    for i in range(agents.size()):
+        agents[i].state = "idle"
+        agents[i].target = agents[i].pos
+        agents[i].decision = 0.0
 
 func _advance_fire(delta: float) -> void:
     var night := _is_night()
@@ -382,9 +412,12 @@ func _draw_fire() -> void:
     var strength := clampf(fire_fuel / 5.0, 0.35, 1.0)
     for radius in range(62, 20, -6):
         draw_circle(FIRE_POS + Vector2(0, -3), radius * strength, Color(1.0,0.42,0.1,0.012))
-    var frame: Texture2D = FIRE_FRAMES[int(visual_time * 5.0) % FIRE_FRAMES.size()]
-    var fire_size := frame.get_size()
-    draw_texture(frame,FIRE_POS+Vector2(-fire_size.x*.5,20-fire_size.y))
+    var ground_anchor := FIRE_POS + Vector2(0,20)
+    var base_size := FIRE_BASE.get_size()
+    draw_texture(FIRE_BASE,ground_anchor-Vector2(base_size.x*.5,base_size.y))
+    var flame: Texture2D = FLAME_FRAMES[int(visual_time * 5.0) % FLAME_FRAMES.size()]
+    var flame_size := flame.get_size()
+    draw_texture(flame,ground_anchor-Vector2(flame_size.x*.5,flame_size.y+11))
     for i in range(5):
         var life := fmod(visual_time * 0.10 + float(i) * 0.2, 1.0)
         var smoke := FIRE_POS + Vector2(sin(life * 5.0 + i) * 8.0, -30.0 - life * 86.0)
@@ -396,9 +429,10 @@ func _draw_fire() -> void:
 func _draw_agent(agent: Dictionary) -> void:
     var pos: Vector2 = agent.pos
     var sleeping: bool = agent.state == "sleep" and pos.distance_to(agent.target) < 8.0
-    var breathing := sin(visual_time * (1.2 if agent.dog else 0.75) + pos.x * 0.02) * 0.8
-    pos.y += breathing
     var moving: bool = agent.pos.distance_to(agent.target) > 3.0
+    var walk_frame := int(visual_time * (8.0 if agent.dog else 6.0)) % 4
+    var breathing := sin(visual_time * (1.2 if agent.dog else 0.75) + pos.x * 0.02) * 0.8
+    pos.y += (-1.0 if moving and walk_frame % 2 == 1 else breathing)
     var texture: Texture2D
     var pose := "idle"
     if agent.dog:
@@ -407,15 +441,17 @@ func _draw_agent(agent: Dictionary) -> void:
         elif agent.state == "sit":
             pose = "rest"
         elif moving:
-            pose = "walk"
+            pose = "idle"
         elif agent.state == "shelter":
             pose = "sit"
         texture = MILO_SPRITES[pose]
+        if moving:
+            texture = MILO_WALK_FRAMES[walk_frame]
     else:
         if sleeping:
             pose = "sleep"
         elif moving:
-            pose = "walk"
+            pose = "idle"
         elif agent.state == "sit":
             pose = "sit"
         elif agent.state == "eat":
@@ -423,10 +459,17 @@ func _draw_agent(agent: Dictionary) -> void:
         elif agent.state == "feed_fire":
             pose = "warm" if agent.name == "Nora" else "tend"
         texture = NORA_SPRITES[pose] if agent.name == "Nora" else OTTO_SPRITES[pose]
+        if moving:
+            texture = NORA_WALK_FRAMES[walk_frame] if agent.name == "Nora" else OTTO_WALK_FRAMES[walk_frame]
+    var shelter_alpha := 1.0
+    if raining and agent.state == "shelter":
+        shelter_alpha = clampf(agent.pos.distance_to(agent.target) / 20.0,0.0,1.0)
+        if shelter_alpha <= 0.02:
+            return
     var sprite_size := texture.get_size()
     var flip := -1.0 if agent.facing < 0.0 and not sleeping else 1.0
     draw_set_transform(pos + Vector2(0, 13), 0.0, Vector2(flip,1.0))
-    draw_texture(texture, Vector2(-sprite_size.x * 0.5, -sprite_size.y))
+    draw_texture(texture, Vector2(-sprite_size.x * 0.5, -sprite_size.y),Color(1,1,1,shelter_alpha))
     draw_set_transform(Vector2.ZERO,0.0,Vector2.ONE)
     if sleeping:
         var z_pos := pos + Vector2(sprite_size.x*.28,-sprite_size.y-3)
