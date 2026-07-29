@@ -8,7 +8,7 @@ const FIRE_POS := Vector2(650, 260)
 const TENT_POS := Vector2(900, 250)
 const BRANCH_POSITIONS := [Vector2(210, 265), Vector2(330, 267), Vector2(1080, 266)]
 
-var world_time := 0.30
+var world_time := 0.92
 var day_number := 1
 var raining := false
 var weather_timer := 32.0
@@ -23,13 +23,14 @@ var capture_finished := false
 
 func _ready() -> void:
     rng.randomize()
+    capture_requested = "--capture" in OS.get_cmdline_user_args()
     agents = [
         _make_agent("Nora", Vector2(520, GROUND_Y), Color("#d17a74"), false),
         _make_agent("Otto", Vector2(760, GROUND_Y), Color("#7fa6c9"), false),
         _make_agent("Milo", Vector2(700, GROUND_Y + 7), Color("#b99062"), true)
     ]
-    _load_world()
-    capture_requested = "--capture" in OS.get_cmdline_user_args()
+    if not capture_requested:
+        _load_world()
     set_process(true)
     queue_redraw()
 
@@ -202,7 +203,8 @@ func _draw_sky() -> void:
     var top := night_top.lerp(day_top, daylight)
     var night_horizon := Color("#26304a")
     var day_horizon := Color("#e6a27f")
-    var horizon := night_horizon.lerp(day_horizon, daylight)
+    var dusk := smoothstep(0.64, 0.88, world_time) * (1.0 - smoothstep(0.97, 1.0, world_time))
+    var horizon := night_horizon.lerp(day_horizon, maxf(daylight, dusk * 0.92))
     for y in range(0, 282, 3):
         var blend := smoothstep(0.0, 1.0, float(y) / 282.0)
         draw_rect(Rect2(0, y, WORLD_WIDTH, 4), top.lerp(horizon, blend))
@@ -210,7 +212,8 @@ func _draw_sky() -> void:
     var sun_x := world_time * WORLD_WIDTH
     var arc := sin(world_time * PI)
     var body_y := 210.0 - arc * 150.0
-    if _is_night():
+    var celestial_night := world_time < 0.18 or world_time > 0.97
+    if celestial_night:
         draw_circle(Vector2(sun_x, body_y), 16, Color("#d8dfd5"))
         for p in [Vector2(110,55),Vector2(240,95),Vector2(420,48),Vector2(790,80),Vector2(1040,45),Vector2(1180,110)]:
             draw_circle(p, 1.3 + sin(visual_time * 0.4 + p.x) * 0.25, Color("#e6e5cf"))
@@ -238,6 +241,12 @@ func _draw_landscape() -> void:
     var ground := Color("#263d2d").lerp(Color("#3f5b38"), light * 0.45)
     draw_rect(Rect2(0, GROUND_Y, WORLD_WIDTH, 82), ground)
     draw_line(Vector2(0, GROUND_Y), Vector2(WORLD_WIDTH, GROUND_Y), Color("#718051").darkened((1.0-light)*0.4), 3.0)
+    draw_rect(Rect2(0, 314, WORLD_WIDTH, 46), Color("#18231f").lerp(Color("#263128"), light * 0.2))
+    for x in range(-20, 1310, 38):
+        var stone_y := 316.0 + fmod(float(x * 11 + 43), 17.0)
+        var stone_color := Color("#303833").lerp(Color("#454a40"), light * 0.25)
+        draw_circle(Vector2(x, stone_y), 13.0 + fmod(float(x), 7.0), stone_color)
+        draw_arc(Vector2(x, stone_y), 13.0, PI, TAU, 8, stone_color.lightened(0.12), 1.3)
 
 func _draw_far_forest() -> void:
     var night_fade := (1.0 - _daylight_amount()) * 0.35
@@ -336,6 +345,17 @@ func _draw_foreground_details() -> void:
     for p in [Vector2(385,293),Vector2(795,292),Vector2(1010,299)]:
         draw_circle(p,8,Color("#3c4540"))
         draw_arc(p,8,PI,TAU,8,Color("#646a60"),1.3)
+    # Fire ring, seats and a few lived-in camp traces.
+    for angle in range(0, 360, 45):
+        var rad := deg_to_rad(float(angle))
+        var rock := FIRE_POS + Vector2(cos(rad) * 24.0, 17.0 + sin(rad) * 7.0)
+        draw_circle(rock, 4.5, Color("#5b5a4c"))
+    draw_line(Vector2(555,286), Vector2(608,289), Color("#5a3925"), 10.0)
+    draw_circle(Vector2(608,289), 5.0, Color("#a07143"))
+    draw_line(Vector2(706,291), Vector2(751,287), Color("#533523"), 9.0)
+    draw_circle(Vector2(706,291), 4.5, Color("#95683f"))
+    for x in [205, 223, 1082, 1100]:
+        draw_line(Vector2(x,292),Vector2(x+17,282),Color("#725038"),3.0)
 
 func _draw_whisper_text() -> void:
     if story_timer <= 0.0:
