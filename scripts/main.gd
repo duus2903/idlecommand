@@ -1,16 +1,15 @@
-Exit code: 0
-Wall time: 0.3 seconds
-Output:
 extends Node2D
 
 const SAVE_PATH := "user://idlecommand_save.cfg"
 const WORLD_WIDTH := 1280.0
 const GROUND_Y := 334.0
 const DAY_SECONDS := 180.0
-const FIRE_POS := Vector2(650, 322)
+const FIRE_POS := Vector2(650, 329)
 const TENT_POS := Vector2(1000, 326)
-const BRANCH_POSITIONS := [Vector2(215, 329), Vector2(350, 331), Vector2(1110, 329)]
+const WOOD_STORE_POS := Vector2(908, 337)
+const BRANCH_POSITIONS := [Vector2(250, 334), Vector2(1120, 334)]
 const CAMP_BACKGROUND := preload("res://assets/camp_sunset.png")
+const CAMP_NIGHT := preload("res://assets/camp_night.png")
 const NORA_SPRITES := {
     "idle": preload("res://assets/sprites/nora_idle.png"),
     "sit": preload("res://assets/sprites/nora_sit.png"),
@@ -54,12 +53,32 @@ const FLAME_FRAMES := [
     preload("res://assets/sprites/flame_2.png"),
     preload("res://assets/sprites/flame_3.png")
 ]
+const NORA_GATHER_FRAMES := [
+    preload("res://assets/sprites/nora_gather_0.png"),
+    preload("res://assets/sprites/nora_gather_1.png"),
+    preload("res://assets/sprites/nora_gather_2.png")
+]
+const OTTO_GATHER_FRAMES := [
+    preload("res://assets/sprites/otto_gather_0.png"),
+    preload("res://assets/sprites/otto_gather_1.png"),
+    preload("res://assets/sprites/otto_gather_2.png")
+]
+const BRANCH_SOURCE_FRAMES := [
+    preload("res://assets/sprites/branch_source_low.png"),
+    preload("res://assets/sprites/branch_source_half.png"),
+    preload("res://assets/sprites/branch_source_full.png")
+]
+const BRANCH_BUNDLE := preload("res://assets/sprites/branch_bundle.png")
 
 var world_time := 0.92
 var day_number := 1
 var raining := false
 var weather_timer := 32.0
 var fire_fuel := 5.0
+var fire_heat := 0.82
+var fire_wetness := 0.0
+var stored_branches := 1
+var branch_sources: Array[Dictionary] = []
 var story_line := "Lejren vÃ¥gner stille."
 var story_timer := 0.0
 var agents: Array[Dictionary] = []
@@ -74,14 +93,41 @@ var remembered_moments: Dictionary = {}
 
 func _ready() -> void:
     rng.randomize()
-    capture_requested = "--capture" in OS.get_cmdline_user_args()
+    var user_args := OS.get_cmdline_user_args()
+    capture_requested = user_args.has("capture") or user_args.has("gather_capture") or user_args.has("rain_capture")
     agents = [
         _make_agent("Nora", Vector2(520, GROUND_Y), Color("#d17a74"), false),
         _make_agent("Otto", Vector2(760, GROUND_Y), Color("#7fa6c9"), false),
         _make_agent("Milo", Vector2(700, GROUND_Y + 7), Color("#b99062"), true)
     ]
+    branch_sources = [
+        {"pos": BRANCH_POSITIONS[0], "amount": 3.0},
+        {"pos": BRANCH_POSITIONS[1], "amount": 3.0}
+    ]
     if not capture_requested:
         _load_world()
+    elif user_args.has("gather_capture"):
+        world_time = 0.47
+        agents[0].pos = BRANCH_POSITIONS[0]
+        agents[0].target = agents[0].pos
+        agents[0].state = "breaking_branch"
+        agents[0].interaction = 2.8
+        agents[0].source_index = 0
+        agents[0].decision = 2.8
+        agents[1].pos = FIRE_POS+Vector2(54,0)
+        agents[1].target = agents[1].pos
+        agents[1].state = "sit"
+        agents[1].decision = 8.0
+    elif user_args.has("rain_capture"):
+        world_time = 0.88
+        raining = true
+        weather_timer = 30.0
+        fire_heat = 0.025
+        fire_wetness = 0.88
+        fire_fuel = 2.4
+        _send_everyone_to_shelter()
+        for i in range(agents.size()):
+            agents[i].pos = agents[i].target
     set_process(true)
     queue_redraw()
 
@@ -102,6 +148,8 @@ func _make_agent(display_name: String, start: Vector2, tint: Color, dog: bool) -
         "hunger": rng.randf_range(0.15, 0.35),
         "decision": rng.randf_range(2.0, 6.0),
         "carrying": false,
+        "interaction": 0.0,
+        "source_index": -1,
         "facing": 1.0
     }
 
@@ -158,11 +206,25 @@ func _release_shelter() -> void:
         agents[i].decision = 0.0
 
 func _advance_fire(delta: float) -> void:
-    var night := _is_night()
-    if night and fire_fuel > 0.0:
-        fire_fuel = maxf(0.0, fire_fuel - delta * 0.018)
-    elif not night:
+    var was_lit := fire_heat > 0.06
+    if raining:
+        fire_wetness = minf(1.0, fire_wetness + delta * 0.026)
+        fire_heat = maxf(0.0, fire_heat - delta * (0.018 + fire_wetness * 0.055))
         fire_fuel = maxf(0.0, fire_fuel - delta * 0.004)
+    else:
+        fire_wetness = maxf(0.0, fire_wetness - delta * 0.006)
+        if fire_fuel > 0.05 and fire_heat > 0.03:
+            var desired_heat := clampf((fire_fuel / 5.0) * (1.0 - fire_wetness * 0.55), 0.12, 1.0)
+            fire_heat = move_toward(fire_heat, desired_heat, delta * 0.022)
+            fire_fuel = maxf(0.0, fire_fuel - delta * (0.012 if _is_night() else 0.006))
+        else:
+            fire_heat = maxf(0.0, fire_heat - delta * 0.012)
+    if fire_fuel <= 0.05:
+        fire_heat = maxf(0.0, fire_heat - delta * 0.04)
+    if was_lit and fire_heat <= 0.06:
+        _remember("fire_out_%d" % day_number, "Regnen har efterladt bÃ¥let som mÃ¸rke, rygende glÃ¸der.")
+    for source in branch_sources:
+        source.amount = minf(3.0, float(source.amount) + delta * 0.0035)
 
 func _advance_agents(delta: float) -> void:
     for i in range(agents.size()):
@@ -176,13 +238,12 @@ func _advance_agents(delta: float) -> void:
             agent.facing = signf(direction.x) if absf(direction.x) > 0.05 else agent.facing
             var speed := 54.0 if agent.dog else 38.0
             agent.pos += direction * speed * delta
-        elif agent.decision <= 0.0:
-            agents[i] = agent
-            _choose_action(i)
-            agent = agents[i]
-
         agents[i] = agent
         _apply_arrival(i, delta)
+        agent = agents[i]
+        var busy: bool = agent.state in ["breaking_branch", "adding_wood", "relighting"]
+        if agent.pos.distance_to(agent.target) <= 3.0 and agent.decision <= 0.0 and not busy:
+            _choose_action(i)
 
 func _choose_action(index: int) -> void:
     var agent := agents[index]
@@ -198,23 +259,41 @@ func _choose_action(index: int) -> void:
         var person_index := 0 if milo_attachment[0] >= milo_attachment[1] else 1
         if rng.randf() < 0.28:
             person_index = 1 - person_index
-        agent.state = "follow"
-        agent.target = agents[person_index].pos + Vector2(rng.randf_range(-35, 35), 5)
+        if fire_heat > 0.28 and (_is_night() or agent.energy < 0.52) and rng.randf() < 0.48:
+            agent.state = "warm_fire"
+            agent.target = FIRE_POS + Vector2(82 if rng.randf() < 0.5 else -82,14)
+        elif not _is_night() and rng.randf() < 0.14:
+            agent.state = "sniff_branches"
+            var dog_source := _best_branch_source()
+            agent.target = branch_sources[dog_source].pos + Vector2(rng.randf_range(-20,20),5)
+        elif agent.energy < 0.38:
+            agent.state = "sit"
+            agent.target = agents[person_index].pos + Vector2(rng.randf_range(-24,24),7)
+        else:
+            agent.state = "follow"
+            agent.target = agents[person_index].pos + Vector2(rng.randf_range(-35, 35), 5)
     elif agent.hunger > 0.72:
         agent.state = "eat"
         agent.target = FIRE_POS + Vector2(-45 if index == 0 else 45, 14)
-    elif fire_fuel < 3.2 and not agent.carrying:
-        agent.state = "gather"
-        agent.target = BRANCH_POSITIONS[rng.randi_range(0, BRANCH_POSITIONS.size() - 1)]
+    elif (fire_heat < 0.12 or fire_fuel < 2.8) and not agent.carrying:
+        if stored_branches > 0 and fire_heat < 0.12:
+            agent.state = "take_stored_wood"
+            agent.target = WOOD_STORE_POS
+        else:
+            _begin_branch_gather(index,agent)
+            return
     elif agent.carrying:
-        agent.state = "feed_fire"
-        agent.target = FIRE_POS + Vector2(rng.randf_range(-30, 30), 8)
+        agent.state = "carry_to_fire"
+        agent.target = FIRE_POS + Vector2(-30 if index == 0 else 30, 8)
+    elif stored_branches < 3 and not _is_night() and rng.randf() < 0.16:
+        _begin_branch_gather(index,agent,true)
+        return
     elif _is_night() and rng.randf() < 0.16:
         agent.state = "stargaze"
         agent.target = Vector2(390 if index == 0 else 1080, GROUND_Y)
     elif nora_otto_bond > 0.24 and rng.randf() < 0.32:
-        agent.state = "sit"
-        agent.target = FIRE_POS + Vector2(-52 if index == 0 else 52, 9)
+        _begin_shared_fire_moment(index)
+        return
     elif _is_night() or rng.randf() < 0.38:
         agent.state = "sit"
         agent.target = FIRE_POS + Vector2(-58 if index == 0 else 58, 9)
@@ -224,6 +303,36 @@ func _choose_action(index: int) -> void:
 
     agents[index] = agent
 
+func _begin_shared_fire_moment(initiator: int) -> void:
+    var duration := rng.randf_range(10.0,16.0)
+    for i in range(2):
+        agents[i].state = "sit"
+        agents[i].target = FIRE_POS+Vector2(-52 if i == 0 else 52,9)
+        agents[i].decision = duration+float(i)*0.8
+    if rng.randf() < 0.45:
+        _remember("shared_fire_%d" % day_number,"Nora og Otto deler et stille Ã¸jeblik ved bÃ¥let.")
+
+func _best_branch_source() -> int:
+    var best := 0
+    for i in range(1,branch_sources.size()):
+        if float(branch_sources[i].amount) > float(branch_sources[best].amount):
+            best = i
+    return best
+
+func _begin_branch_gather(index: int, agent: Dictionary, for_storage: bool = false) -> void:
+    var source_index := _best_branch_source()
+    if float(branch_sources[source_index].amount) < 0.35:
+        agent.state = "sit"
+        agent.target = FIRE_POS + Vector2(-55 if index == 0 else 55,9)
+        agent.decision = 4.0
+    else:
+        agent.state = "gather"
+        agent.source_index = source_index
+        agent.target = branch_sources[source_index].pos
+        agent.decision = 8.0
+        agent["gather_for_storage"] = for_storage
+    agents[index] = agent
+
 func _apply_arrival(index: int, delta: float) -> void:
     var agent := agents[index]
     if agent.pos.distance_to(agent.target) > 5.0:
@@ -231,343 +340,40 @@ func _apply_arrival(index: int, delta: float) -> void:
 
     match agent.state:
         "gather":
-            agent.carrying = true
-            agent.state = "feed_fire"
-            agent.target = FIRE_POS + Vector2(rng.randf_range(-26, 26), 8)
-            agent.decision = 3.0
-            _say("%s finder nogle tÃ¸rre grene." % agent.name)
-        "feed_fire":
-            if agent.carrying:
-                agent.carrying = false
-                fire_fuel = minf(8.0, fire_fuel + 2.2)
-                _say("%s lÃ¦gger grene pÃ¥ bÃ¥let." % agent.name)
-            agent.state = "sit"
-            agent.decision = rng.randf_range(7.0, 13.0)
-        "sleep":
-            agent.energy = minf(1.0, agent.energy + delta * 0.035)
-            agent.decision = maxf(agent.decision, 2.0)
-        "sit":
-            agent.energy = minf(1.0, agent.energy + delta * 0.004)
-        "eat":
-            agent.hunger = maxf(0.08, agent.hunger - delta * 0.055)
-            agent.energy = minf(1.0, agent.energy + delta * 0.003)
-            if agent.hunger < 0.25:
-                _remember("meal_%d_%s" % [day_number, agent.name], "%s spiser stille ved bÃ¥let." % agent.name)
-                agent.state = "sit"
-                agent.decision = rng.randf_range(5.0,9.0)
-        "stargaze":
-            _remember("sky_%d_%s" % [day_number, agent.name], "%s bliver stÃ¥ende lidt under aftenhimlen." % agent.name)
-            agent.state = "watching_sky"
-            agent.decision = rng.randf_range(8.0,14.0)
-        "shelter":
-            agent.energy = minf(1.0, agent.energy + delta * 0.008)
-        _:
-            pass
-    agents[index] = agent
-
-func _advance_relationships(delta: float) -> void:
-    if agents.size() < 3:
-        return
-    var nora: Dictionary = agents[0]
-    var otto: Dictionary = agents[1]
-    var milo: Dictionary = agents[2]
-    var quietly_together: bool = nora.pos.distance_to(otto.pos) < 92.0 and nora.state in ["sit","eat","shelter"] and otto.state in ["sit","eat","shelter"]
-    if quietly_together:
-        nora_otto_bond = minf(1.0,nora_otto_bond + delta * 0.0012)
-        if nora_otto_bond >= 0.25:
-            _remember("bond_first_fire", "Nora og Otto har fundet deres faste pladser ved bÃ¥let.")
-        if nora_otto_bond >= 0.55:
-            _remember("bond_trusted", "Stilheden mellem Nora og Otto fÃ¸les efterhÃ¥nden tryg.")
-    for i in range(2):
-        if milo.pos.distance_to(agents[i].pos) < 58.0:
-            milo_attachment[i] = minf(1.0,float(milo_attachment[i]) + delta * 0.0008)
-
-func _remember(key: String, text: String) -> void:
-    if remembered_moments.has(key):
-        return
-    remembered_moments[key] = true
-    event_history.append("Dag %d Â· %s" % [day_number,text])
-    if event_history.size() > 32:
-        event_history.pop_front()
-    _say(text)
-
-func _is_night() -> bool:
-    return world_time < 0.22 or world_time > 0.76
-
-func _say(text: String) -> void:
-    story_line = text
-    story_timer = 8.0
-
-func _draw() -> void:
-    _draw_background_art()
-    _draw_fire()
-    for agent in agents:
-        _draw_agent(agent)
-    if raining:
-        _draw_rain()
-    _draw_living_details()
-    _draw_whisper_text()
-
-func _draw_background_art() -> void:
-    draw_texture_rect(CAMP_BACKGROUND, Rect2(0, 0, 1280, 360), false)
-    # The authored sunset remains the visual anchor while a restrained tint
-    # lets the same landscape breathe through the simulation's daily rhythm.
-    var night_strength := 0.0
-    if world_time < 0.20:
-        night_strength = 1.0 - world_time / 0.20
-    elif world_time > 0.78:
-        night_strength = (world_time - 0.78) / 0.22
-    if night_strength > 0.0:
-        draw_rect(Rect2(0,0,1280,360),Color(0.035,0.07,0.16,night_strength*0.38))
-    elif world_time > 0.22 and world_time < 0.62:
-        draw_rect(Rect2(0,0,1280,360),Color(1.0,0.89,0.68,0.05))
-    if _is_night():
-        for p in [Vector2(132,54),Vector2(258,89),Vector2(446,45),Vector2(706,71),Vector2(904,43),Vector2(1128,82)]:
-            draw_circle(p,1.0 + sin(visual_time*.4+p.x)*.25,Color(1.0,0.94,0.72,0.65))
-
-func _draw_sky() -> void:
-    var daylight := _daylight_amount()
-    var night_top := Color("#121b30")
-    var day_top := Color("#6f91ad")
-    var top := night_top.lerp(day_top, daylight)
-    var night_horizon := Color("#26304a")
-    var day_horizon := Color("#e6a27f")
-    var dusk := smoothstep(0.64, 0.88, world_time) * (1.0 - smoothstep(0.97, 1.0, world_time))
-    var horizon := night_horizon.lerp(day_horizon, maxf(daylight, dusk * 0.92))
-    for y in range(0, 282, 3):
-        var blend := smoothstep(0.0, 1.0, float(y) / 282.0)
-        draw_rect(Rect2(0, y, WORLD_WIDTH, 4), top.lerp(horizon, blend))
-
-    var sun_x := world_time * WORLD_WIDTH
-    var arc := sin(world_time * PI)
-    var body_y := 210.0 - arc * 150.0
-    var celestial_night := world_time < 0.18 or world_time > 0.97
-    if celestial_night:
-        draw_circle(Vector2(sun_x, body_y), 16, Color("#d8dfd5"))
-        for p in [Vector2(110,55),Vector2(240,95),Vector2(420,48),Vector2(790,80),Vector2(1040,45),Vector2(1180,110)]:
-            draw_circle(p, 1.3 + sin(visual_time * 0.4 + p.x) * 0.25, Color("#e6e5cf"))
-    else:
-        for radius in range(52, 20, -4):
-            draw_circle(Vector2(sun_x, body_y), radius, Color(1.0, 0.67, 0.35, 0.008))
-        draw_circle(Vector2(sun_x, body_y), 18, Color("#f8d89b"))
-    var cloud_tint := Color(0.76, 0.61, 0.61, 0.18 + daylight * 0.12)
-    for cloud in [Vector2(190,120), Vector2(505,86), Vector2(870,134), Vector2(1110,76)]:
-        var drift := fmod(visual_time * 1.3 + cloud.x, 1440.0) - 80.0
-        draw_line(Vector2(drift - 48, cloud.y), Vector2(drift + 52, cloud.y), cloud_tint, 2.0)
-        draw_circle(Vector2(drift - 15, cloud.y - 3), 9, cloud_tint)
-        draw_circle(Vector2(drift + 8, cloud.y - 7), 13, cloud_tint)
-
-func _daylight_amount() -> float:
-    return clampf(sin(world_time * PI), 0.0, 1.0)
-
-func _draw_landscape() -> void:
-    var light := _daylight_amount()
-    var far := Color("#586875").darkened((1.0 - light) * 0.5)
-    var rear_hills := PackedVector2Array([Vector2(0,239),Vector2(105,190),Vector2(185,228),Vector2(275,169),Vector2(365,231),Vector2(470,180),Vector2(570,222),Vector2(685,159),Vector2(790,226),Vector2(900,172),Vector2(1012,228),Vector2(1138,177),Vector2(1280,223),Vector2(1280,290),Vector2(0,290)])
-    draw_colored_polygon(rear_hills, far)
-    var front_hills := PackedVector2Array([Vector2(0,254),Vector2(128,216),Vector2(245,251),Vector2(370,207),Vector2(495,253),Vector2(612,214),Vector2(740,250),Vector2(872,205),Vector2(1010,252),Vector2(1140,218),Vector2(1280,248),Vector2(1280,300),Vector2(0,300)])
-    draw_colored_polygon(front_hills, Color("#34484a").lerp(Color("#49635a"), light * 0.35))
-    var ground := Color("#263d2d").lerp(Color("#3f5b38"), light * 0.45)
-    draw_rect(Rect2(0, GROUND_Y, WORLD_WIDTH, 82), ground)
-    draw_line(Vector2(0, GROUND_Y), Vector2(WORLD_WIDTH, GROUND_Y), Color("#718051").darkened((1.0-light)*0.4), 3.0)
-    draw_rect(Rect2(0, 314, WORLD_WIDTH, 46), Color("#18231f").lerp(Color("#263128"), light * 0.2))
-    for x in range(-20, 1310, 38):
-        var stone_y := 316.0 + fmod(float(x * 11 + 43), 17.0)
-        var stone_color := Color("#303833").lerp(Color("#454a40"), light * 0.25)
-        draw_circle(Vector2(x, stone_y), 13.0 + fmod(float(x), 7.0), stone_color)
-        draw_arc(Vector2(x, stone_y), 13.0, PI, TAU, 8, stone_color.lightened(0.12), 1.3)
-
-func _draw_far_forest() -> void:
-    var night_fade := (1.0 - _daylight_amount()) * 0.35
-    for x in range(-10, 1300, 27):
-        var height := 25.0 + fmod(float(x * 13 + 79), 32.0)
-        _draw_pine(Vector2(x, GROUND_Y + 2), height, Color("#243a32").darkened(night_fade), sin(visual_time * 0.22 + x) * 0.3)
-    _draw_pine(Vector2(88, GROUND_Y + 4), 116, Color("#172b23"), sin(visual_time * 0.18) * 0.8)
-    _draw_pine(Vector2(1185, GROUND_Y + 4), 134, Color("#162920"), sin(visual_time * 0.17 + 1.0))
-    _draw_pine(Vector2(1105, GROUND_Y + 2), 82, Color("#1e3327"), sin(visual_time * 0.2 + 2.0) * 0.7)
-
-func _draw_pine(base: Vector2, height: float, color: Color, sway: float) -> void:
-    draw_rect(Rect2(base.x - 2, base.y - height * 0.42, 4, height * 0.44), Color("#443326"))
-    for layer in range(4):
-        var y := base.y - height + layer * height * 0.19
-        var half := height * (0.15 + layer * 0.055)
-        draw_colored_polygon(PackedVector2Array([Vector2(base.x + sway,y),Vector2(base.x-half,y+height*0.34),Vector2(base.x+half,y+height*0.34)]),color.lightened(layer*0.025))
-
-func _draw_tent() -> void:
-    var canvas := Color("#a8734f").darkened((1.0 - _daylight_amount()) * 0.24)
-    draw_circle(TENT_POS + Vector2(0,-28), 54, Color(1.0,0.48,0.18,0.035 if _is_night() else 0.01))
-    var tent := PackedVector2Array([Vector2(835,278),Vector2(900,205),Vector2(970,278)])
-    draw_colored_polygon(tent, canvas)
-    draw_polyline(PackedVector2Array([Vector2(835,278),Vector2(900,205),Vector2(970,278)]), Color("#684a35"), 4.0)
-    draw_line(Vector2(900,201),Vector2(900,280),Color("#493429"),3.0)
-    draw_colored_polygon(PackedVector2Array([Vector2(900,278),Vector2(900,232),Vector2(929,278)]),Color("#3b302a"))
-    draw_line(Vector2(900,205), Vector2(818,281), Color("#d0a477"), 1.5)
-    draw_line(Vector2(900,205), Vector2(986,281), Color("#d0a477"), 1.5)
-    draw_circle(Vector2(817,281), 2.5, Color("#9b7958"))
-    draw_circle(Vector2(987,281), 2.5, Color("#9b7958"))
-
-func _draw_fire() -> void:
-    if fire_fuel <= 0.15:
-        return
-    var strength := clampf(fire_fuel / 5.0, 0.35, 1.0)
-    for radius in range(62, 20, -6):
-        draw_circle(FIRE_POS + Vector2(0, -3), radius * strength, Color(1.0,0.42,0.1,0.012))
-    var ground_anchor := FIRE_POS + Vector2(0,20)
-    var base_size := FIRE_BASE.get_size()
-    draw_texture(FIRE_BASE,ground_anchor-Vector2(base_size.x*.5,base_size.y))
-    var flame: Texture2D = FLAME_FRAMES[int(visual_time * 5.0) % FLAME_FRAMES.size()]
-    var flame_size := flame.get_size()
-    draw_texture(flame,ground_anchor-Vector2(flame_size.x*.5,flame_size.y+11))
-    for i in range(5):
-        var life := fmod(visual_time * 0.10 + float(i) * 0.2, 1.0)
-        var smoke := FIRE_POS + Vector2(sin(life * 5.0 + i) * 8.0, -30.0 - life * 86.0)
-        draw_circle(smoke, 4.0 + life * 8.0, Color(0.72,0.68,0.62,(1.0-life)*0.13))
-    for i in range(6):
-        var ember := fmod(visual_time * 0.3 + float(i) * 0.16, 1.0)
-        draw_circle(FIRE_POS + Vector2(sin(float(i)*8.0)*12.0,-20-ember*45),1.2,Color(1.0,0.65,0.18,1.0-ember))
-
-func _draw_agent(agent: Dictionary) -> void:
-    var pos: Vector2 = agent.pos
-    var sleeping: bool = agent.state == "sleep" and pos.distance_to(agent.target) < 8.0
-    var moving: bool = agent.pos.distance_to(agent.target) > 3.0
-    var walk_frame := int(visual_time * (8.0 if agent.dog else 6.0)) % 4
-    var breathing := sin(visual_time * (1.2 if agent.dog else 0.75) + pos.x * 0.02) * 0.8
-    pos.y += (-1.0 if moving and walk_frame % 2 == 1 else breathing)
-    var texture: Texture2D
-    var pose := "idle"
-    if agent.dog:
-        if sleeping:
-            pose = "sleep"
-        elif agent.state == "sit":
-            pose = "rest"
-        elif moving:
-            pose = "idle"
-        elif agent.state == "shelter":
-            pose = "sit"
-        texture = MILO_SPRITES[pose]
-        if moving:
-            texture = MILO_WALK_FRAMES[walk_frame]
-    else:
-        if sleeping:
-            pose = "sleep"
-        elif moving:
-            pose = "idle"
-        elif agent.state == "sit":
-            pose = "sit"
-        elif agent.state == "eat":
-            pose = "sit"
-        elif agent.state == "feed_fire":
-            pose = "warm" if agent.name == "Nora" else "tend"
-        texture = NORA_SPRITES[pose] if agent.name == "Nora" else OTTO_SPRITES[pose]
-        if moving:
-            texture = NORA_WALK_FRAMES[walk_frame] if agent.name == "Nora" else OTTO_WALK_FRAMES[walk_frame]
-    var shelter_alpha := 1.0
-    if raining and agent.state == "shelter":
-        shelter_alpha = clampf(agent.pos.distance_to(agent.target) / 20.0,0.0,1.0)
-        if shelter_alpha <= 0.02:
-            return
-    var sprite_size := texture.get_size()
-    var flip := -1.0 if agent.facing < 0.0 and not sleeping else 1.0
-    draw_set_transform(pos + Vector2(0, 13), 0.0, Vector2(flip,1.0))
-    draw_texture(texture, Vector2(-sprite_size.x * 0.5, -sprite_size.y),Color(1,1,1,shelter_alpha))
-    draw_set_transform(Vector2.ZERO,0.0,Vector2.ONE)
-    if sleeping:
-        var z_pos := pos + Vector2(sprite_size.x*.28,-sprite_size.y-3)
-        draw_string(ThemeDB.fallback_font,z_pos,"z",HORIZONTAL_ALIGNMENT_LEFT,-1,11,Color(1,1,0.86,0.58))
-
-func _draw_ellipse_shape(center: Vector2, radii: Vector2, color: Color) -> void:
-    var points := PackedVector2Array()
-    for i in range(24):
-        var a := TAU * float(i) / 24.0
-        points.append(center + Vector2(cos(a)*radii.x,sin(a)*radii.y))
-    draw_colored_polygon(points,color)
-
-func _draw_rain() -> void:
-    var t := Time.get_ticks_msec() * 0.25
-    for i in range(75):
-        var x := fmod(float(i * 83) + t, WORLD_WIDTH + 40.0) - 20.0
-        var y := fmod(float(i * 47) + t * 1.7, 315.0)
-        draw_line(Vector2(x,y),Vector2(x-7,y+16),Color(0.75,0.86,0.92,0.48),1.2)
-
-func _draw_living_details() -> void:
-    for x in range(420, 875, 31):
-        var base := Vector2(x, 347 + fmod(float(x), 5.0))
-        var sway := sin(visual_time * 0.5 + x * 0.09) * 1.5
-        draw_line(base,base+Vector2(sway-2,-7),Color(0.34,0.48,0.25,0.75),1.0)
-    for i in range(3):
-        var mote := fmod(visual_time * (0.018 + i*.004) + i*.31,1.0)
-        draw_circle(Vector2(505+i*128 + sin(visual_time*.7+i)*12,286-mote*32),1.0,Color(1.0,0.74,0.25,(1.0-mote)*.45))
-
-func _draw_foreground_details() -> void:
-    for x in range(14, 1270, 18):
-        var sway := sin(visual_time * 0.48 + x * 0.07) * 2.2
-        var base := Vector2(x, GROUND_Y + 8 + fmod(float(x * 7), 14.0))
-        draw_line(base, base + Vector2(-3 + sway, -11 - fmod(float(x), 7.0)), Color("#688052").darkened((1.0-_daylight_amount())*.4), 1.4)
-    for p in [Vector2(280,285),Vector2(326,290),Vector2(1038,286),Vector2(1088,292),Vector2(440,287)]:
-        draw_line(p,p+Vector2(sin(visual_time*.4+p.x)*1.5,-10),Color("#557147"),1.5)
-        draw_circle(p+Vector2(0,-12),2.2,Color("#d4a44e" if int(p.x)%3 else "#d9c9a5"))
-    for p in [Vector2(385,293),Vector2(795,292),Vector2(1010,299)]:
-        draw_circle(p,8,Color("#3c4540"))
-        draw_arc(p,8,PI,TAU,8,Color("#646a60"),1.3)
-    # Fire ring, seats and a few lived-in camp traces.
-    for angle in range(0, 360, 45):
-        var rad := deg_to_rad(float(angle))
-        var rock := FIRE_POS + Vector2(cos(rad) * 24.0, 17.0 + sin(rad) * 7.0)
-        draw_circle(rock, 4.5, Color("#5b5a4c"))
-    draw_line(Vector2(555,286), Vector2(608,289), Color("#5a3925"), 10.0)
-    draw_circle(Vector2(608,289), 5.0, Color("#a07143"))
-    draw_line(Vector2(706,291), Vector2(751,287), Color("#533523"), 9.0)
-    draw_circle(Vector2(706,291), 4.5, Color("#95683f"))
-    for x in [205, 223, 1082, 1100]:
-        draw_line(Vector2(x,292),Vector2(x+17,282),Color("#725038"),3.0)
-
-func _draw_whisper_text() -> void:
-    if story_timer <= 0.0:
-        return
-    var alpha := clampf(story_timer / 2.0,0.0,1.0)
-    var text := "Dag %d  Â·  %s" % [day_number, story_line]
-    var width := ThemeDB.fallback_font.get_string_size(text,HORIZONTAL_ALIGNMENT_LEFT,-1,16).x
-    draw_string(ThemeDB.fallback_font,Vector2((WORLD_WIDTH-width)*0.5,32),text,HORIZONTAL_ALIGNMENT_LEFT,-1,16,Color(0.96,0.94,0.85,alpha))
-
-func _save_world() -> void:
-    var cfg := ConfigFile.new()
-    cfg.set_value("world","time",world_time)
-    cfg.set_value("world","day",day_number)
-    cfg.set_value("world","fire_fuel",fire_fuel)
-    cfg.set_value("world","unix_time",Time.get_unix_time_from_system())
-    cfg.set_value("story","nora_otto_bond",nora_otto_bond)
-    cfg.set_value("story","milo_attachment",milo_attachment)
-    cfg.set_value("story","event_history",event_history)
-    cfg.set_value("story","remembered_moments",remembered_moments)
-    for i in range(agents.size()):
-        cfg.set_value("agent_%d" % i,"position",agents[i].pos)
-        cfg.set_value("agent_%d" % i,"energy",agents[i].energy)
-        cfg.set_value("agent_%d" % i,"hunger",agents[i].hunger)
-    cfg.save(SAVE_PATH)
-
-func _load_world() -> void:
-    var cfg := ConfigFile.new()
-    if cfg.load(SAVE_PATH) != OK:
-        return
-    world_time = float(cfg.get_value("world","time",world_time))
-    day_number = int(cfg.get_value("world","day",day_number))
-    fire_fuel = float(cfg.get_value("world","fire_fuel",fire_fuel))
-    nora_otto_bond = float(cfg.get_value("story","nora_otto_bond",nora_otto_bond))
-    milo_attachment = cfg.get_value("story","milo_attachment",milo_attachment)
-    var loaded_history: Array = cfg.get_value("story","event_history",[])
-    event_history.assign(loaded_history)
-    remembered_moments = cfg.get_value("story","remembered_moments",remembered_moments)
-    var then := int(cfg.get_value("world","unix_time",Time.get_unix_time_from_system()))
-    var elapsed := clampi(int(Time.get_unix_time_from_system()) - then,0,86400 * 7)
-    world_time += float(elapsed) / DAY_SECONDS
-    day_number += int(floor(world_time))
-    world_time = fmod(world_time,1.0)
-    fire_fuel = maxf(0.5,fire_fuel - elapsed * 0.0007)
-    for i in range(agents.size()):
-        agents[i].pos = cfg.get_value("agent_%d" % i,"position",agents[i].pos)
-        if agents[i].pos.y < GROUND_Y - 18.0:
-            agents[i].pos.y = GROUND_Y + (7.0 if agents[i].dog else 0.0)
-        agents[i].target = agents[i].pos
-        agents[i].energy = float(cfg.get_value("agent_%d" % i,"energy",agents[i].energy))
-        agents[i].hunger = float(cfg.get_value("agent_%d" % i,"hunger",agents[i].hunger))
-    _say("Verden har levet videre, mens du var vÃ¦k.")
+            agent.state = "breaking_branch"
+            agent.interaction = 2.8
+            agent.decision = 2.8
+        "breaking_branch":
+            agent.interaction -= delta
+            agent.decision = agent.interaction
+            if agent.interaction <= 0.0:
+                var source_index := int(agent.source_index)
+                branch_sources[source_index].amount = maxf(0.0,float(branch_sources[source_index].amount)-1.0)
+                agent.carrying = true
+                if bool(agent.get("gather_for_storage",false)) and fire_heat >= 0.12:
+                    agent.state = "carry_to_store"
+                    agent.target = WOOD_STORE_POS
+                else:
+                    agent.state = "carry_to_fire"
+                    agent.target = FIRE_POS + Vector2(-30 if index == 0 else 30,8)
+                agent.decision = 6.0
+                _say("%s knÃ¦kker et bundt tÃ¸rre grene fri." % agent.name)
+        "take_stored_wood":
+            if stored_branches > 0:
+                stored_branches -= 1
+                agent.carrying = true
+                agent.state = "carry_to_fire"
+                agent.target = FIRE_POS + Vector2(-30 if index == 0 else 30,8)
+                agent.decision = 5.0
+            else:
+                agent.decision = 0.0
+        "carry_to_store":
+            stored_branches = mini(4,stored_branches+1)
+            agent.carrying = false
+            agent.state = "idle"
+            agent.decision = rng.randf_range(4.0,8.0)
+            _say("%s lÃ¦gger tÃ¸rre grene under teltets lÃ¦." % agent.name)
+        "carry_to_fire":
+            agent.state = "adding_wood"
+            agent.interactiÛw¶‰Ëkºwµçy}à°‰½‘å}ä¤°€Äà°½±½È ˆ˜áàåˆˆ¤¤(€€€Ù…È±½Õ‘}Ñ¥¹Ğ€èô½±½È À¸ÜØ°€À¸ØÄ°€À¸ØÄ°€À¸Äà€¬‘…å±¥¡Ğ€¨€À¸ÄÈ¤(€€€™½È±½Õ¥¸mY•Ñ½ÈÈ ÄäÀ°ÄÈÀ¤°Y•Ñ½ÈÈ ÔÀÔ°àØ¤°Y•Ñ½ÈÈ àÜÀ°ÄÌĞ¤°Y•Ñ½ÈÈ ÄÄÄÀ°ÜØ¥tè(€€€€€€€Ù…È‘É¥™Ğ€èô™µ½¡Ù¥ÍÕ…±}Ñ¥µ”€¨€Ä¸Ì€¬±½Õ¹à°€ÄĞĞÀ¸À¤€´€àÀ¸À(€€€€€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ¡‘É¥™Ğ€´€Ğà°±½Õ¹ä¤°Y•Ñ½ÈÈ¡‘É¥™Ğ€¬€ÔÈ°±½Õ¹ä¤°±½Õ‘}Ñ¥¹Ğ°€È¸À¤(€€€€€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ¡‘É¥™Ğ€´€ÄÔ°±½Õ¹ä€´€Ì¤°€ä°±½Õ‘}Ñ¥¹Ğ¤(€€€€€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ¡‘É¥™Ğ€¬€à°±½Õ¹ä€´€Ü¤°€ÄÌ°±½Õ‘}Ñ¥¹Ğ¤()™Õ¹Œ}‘…å±¥¡Ñ}…µ½Õ¹Ğ ¤€´ø™±½…Ğè(€€€É•ÑÕÉ¸±…µÁ˜¡Í¥¸¡İ½É±‘}Ñ¥µ”€¨A$¤°€À¸À°€Ä¸À¤()™Õ¹Œ}‘É…İ}±…¹‘Í…Á” ¤€´øÙ½¥è(€€€Ù…È±¥¡Ğ€èô}‘…å±¥¡Ñ}…µ½Õ¹Ğ ¤(€€€Ù…È™…È€èô½±½È ˆŒÔàØàÜÔˆ¤¹‘…É­•¹•  Ä¸À€´±¥¡Ğ¤€¨€À¸Ô¤(€€€Ù…ÈÉ•…É}¡¥±±Ì€èôA…­•‘Y•Ñ½ÈÉÉÉ…ä¡mY•Ñ½ÈÈ À°ÈÌä¤±Y•Ñ½ÈÈ ÄÀÔ°ÄäÀ¤±Y•Ñ½ÈÈ ÄàÔ°ÈÈà¤±Y•Ñ½ÈÈ ÈÜÔ°ÄØä¤±Y•Ñ½ÈÈ ÌØÔ°ÈÌÄ¤±Y•Ñ½ÈÈ ĞÜÀ°ÄàÀ¤±Y•Ñ½ÈÈ ÔÜÀ°ÈÈÈ¤±Y•Ñ½ÈÈ ØàÔ°ÄÔä¤±Y•Ñ½ÈÈ ÜäÀ°ÈÈØ¤±Y•Ñ½ÈÈ äÀÀ°ÄÜÈ¤±Y•Ñ½ÈÈ ÄÀÄÈ°ÈÈà¤±Y•Ñ½ÈÈ ÄÄÌà°ÄÜÜ¤±Y•Ñ½ÈÈ ÄÈàÀ°ÈÈÌ¤±Y•Ñ½ÈÈ ÄÈàÀ°ÈäÀ¤±Y•Ñ½ÈÈ À°ÈäÀ¥t¤(€€€‘É…İ}½±½É•‘}Á½±å½¸¡É•…É}¡¥±±Ì°™…È¤(€€€Ù…È™É½¹Ñ}¡¥±±Ì€èôA…­•‘Y•Ñ½ÈÉÉÉ…ä¡mY•Ñ½ÈÈ À°ÈÔĞ¤±Y•Ñ½ÈÈ ÄÈà°ÈÄØ¤±Y•Ñ½ÈÈ ÈĞÔ°ÈÔÄ¤±Y•Ñ½ÈÈ ÌÜÀ°ÈÀÜ¤±Y•Ñ½ÈÈ ĞäÔ°ÈÔÌ¤±Y•Ñ½ÈÈ ØÄÈ°ÈÄĞ¤±Y•Ñ½ÈÈ ÜĞÀ°ÈÔÀ¤±Y•Ñ½ÈÈ àÜÈ°ÈÀÔ¤±Y•Ñ½ÈÈ ÄÀÄÀ°ÈÔÈ¤±Y•Ñ½ÈÈ ÄÄĞÀ°ÈÄà¤±Y•Ñ½ÈÈ ÄÈàÀ°ÈĞà¤±Y•Ñ½ÈÈ ÄÈàÀ°ÌÀÀ¤±Y•Ñ½ÈÈ À°ÌÀÀ¥t¤(€€€‘É…İ}½±½É•‘}Á½±å½¸¡™É½¹Ñ}¡¥±±Ì°½±½È ˆŒÌĞĞàÑ„ˆ¤¹±•ÉÀ¡½±½È ˆŒĞäØÌÕ„ˆ¤°±¥¡Ğ€¨€À¸ÌÔ¤¤(€€€Ù…ÈÉ½Õ¹€èô½±½È ˆŒÈØÍÉˆ¤¹±•ÉÀ¡½±½È ˆŒÍ˜ÕˆÌàˆ¤°±¥¡Ğ€¨€À¸ĞÔ¤(€€€‘É…İ}É•Ğ¡I•ĞÈ À°I=U9}d°]=I1}]%Q °€àÈ¤°É½Õ¹¤(€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ À°I=U9}d¤°Y•Ñ½ÈÈ¡]=I1}]%Q °I=U9}d¤°½±½È ˆŒÜÄàÀÔÄˆ¤¹‘…É­•¹•  Ä¸Àµ±¥¡Ğ¤¨À¸Ğ¤°€Ì¸À¤(€€€‘É…İ}É•Ğ¡I•ĞÈ À°€ÌÄĞ°]=I1}]%Q °€ĞØ¤°½±½È ˆŒÄàÈÌÅ˜ˆ¤¹±•ÉÀ¡½±½È ˆŒÈØÌÄÈàˆ¤°±¥¡Ğ€¨€À¸È¤¤(€€€™½Èà¥¸É…¹” ´ÈÀ°€ÄÌÄÀ°€Ìà¤è(€€€€€€€Ù…ÈÍÑ½¹•}ä€èô€ÌÄØ¸À€¬™µ½¡™±½…Ğ¡à€¨€ÄÄ€¬€ĞÌ¤°€ÄÜ¸À¤(€€€€€€€Ù…ÈÍÑ½¹•}½±½È€èô½±½È ˆŒÌÀÌàÌÌˆ¤¹±•ÉÀ¡½±½È ˆŒĞÔÑ„ĞÀˆ¤°±¥¡Ğ€¨€À¸ÈÔ¤(€€€€€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ¡à°ÍÑ½¹•}ä¤°€ÄÌ¸À€¬™µ½¡™±½…Ğ¡à¤°€Ü¸À¤°ÍÑ½¹•}½±½È¤(€€€€€€€‘É…İ}…ÉŒ¡Y•Ñ½ÈÈ¡à°ÍÑ½¹•}ä¤°€ÄÌ¸À°A$°QT°€à°ÍÑ½¹•}½±½È¹±¥¡Ñ•¹• À¸ÄÈ¤°€Ä¸Ì¤()™Õ¹Œ}‘É…İ}™…É}™½É•ÍĞ ¤€´øÙ½¥è(€€€Ù…È¹¥¡Ñ}™…‘”€èô€ Ä¸À€´}‘…å±¥¡Ñ}…µ½Õ¹Ğ ¤¤€¨€À¸ÌÔ(€€€™½Èà¥¸É…¹” ´ÄÀ°€ÄÌÀÀ°€ÈÜ¤è(€€€€€€€Ù…È¡•¥¡Ğ€èô€ÈÔ¸À€¬™µ½¡™±½…Ğ¡à€¨€ÄÌ€¬€Üä¤°€ÌÈ¸À¤(€€€€€€€}‘É…İ}Á¥¹”¡Y•Ñ½ÈÈ¡à°I=U9}d€¬€È¤°¡•¥¡Ğ°½±½È ˆŒÈĞÍ„ÌÈˆ¤¹‘…É­•¹•¡¹¥¡Ñ}™…‘”¤°Í¥¸¡Ù¥ÍÕ…±}Ñ¥µ”€¨€À¸ÈÈ€¬à¤€¨€À¸Ì¤(€€€}‘É…İ}Á¥¹”¡Y•Ñ½ÈÈ àà°I=U9}d€¬€Ğ¤°€ÄÄØ°½±½È ˆŒÄÜÉˆÈÌˆ¤°Í¥¸¡Ù¥ÍÕ…±}Ñ¥µ”€¨€À¸Äà¤€¨€À¸à¤(€€€}‘É…İ}Á¥¹”¡Y•Ñ½ÈÈ ÄÄàÔ°I=U9}d€¬€Ğ¤°€ÄÌĞ°½±½È ˆŒÄØÈäÈÀˆ¤°Í¥¸¡Ù¥ÍÕ…±}Ñ¥µ”€¨€À¸ÄÜ€¬€Ä¸À¤¤(€€€}‘É…İ}Á¥¹”¡Y•Ñ½ÈÈ ÄÄÀÔ°I=U9}d€¬€È¤°€àÈ°½±½È ˆŒÅ”ÌÌÈÜˆ¤°Í¥¸¡Ù¥ÍÕ…±}Ñ¥µ”€¨€À¸È€¬€È¸À¤€¨€À¸Ü¤()™Õ¹Œ}‘É…İ}Á¥¹”¡‰…Í”èY•Ñ½ÈÈ°¡•¥¡Ğè™±½…Ğ°½±½Èè½±½È°Íİ…äè™±½…Ğ¤€´øÙ½¥è(€€€‘É…İ}É•Ğ¡I•ĞÈ¡‰…Í”¹à€´€È°‰…Í”¹ä€´¡•¥¡Ğ€¨€À¸ĞÈ°€Ğ°¡•¥¡Ğ€¨€À¸ĞĞ¤°½±½È ˆŒĞĞÌÌÈØˆ¤¤(€€€™½È±…å•È¥¸É…¹” Ğ¤è(€€€€€€€Ù…Èä€èô‰…Í”¹ä€´¡•¥¡Ğ€¬±…å•È€¨¡•¥¡Ğ€¨€À¸Ää(€€€€€€€Ù…È¡…±˜€èô¡•¥¡Ğ€¨€ À¸ÄÔ€¬±…å•È€¨€À¸ÀÔÔ¤(€€€€€€€‘É…İ}½±½É•‘}Á½±å½¸¡A…­•‘Y•Ñ½ÈÉÉÉ…ä¡mY•Ñ½ÈÈ¡‰…Í”¹à€¬Íİ…ä±ä¤±Y•Ñ½ÈÈ¡‰…Í”¹àµ¡…±˜±ä­¡•¥¡Ğ¨À¸ÌĞ¤±Y•Ñ½ÈÈ¡‰…Í”¹à­¡…±˜±ä­¡•¥¡Ğ¨À¸ÌĞ¥t¤±½±½È¹±¥¡Ñ•¹•¡±…å•È¨À¸ÀÈÔ¤¤()™Õ¹Œ}‘É…İ}Ñ•¹Ğ ¤€´øÙ½¥è(€€€Ù…È…¹Ù…Ì€èô½±½È ˆ„àÜÌÑ˜ˆ¤¹‘…É­•¹•  Ä¸À€´}‘…å±¥¡Ñ}…µ½Õ¹Ğ ¤¤€¨€À¸ÈĞ¤(€€€‘É…İ}¥É±”¡Q9Q}A=L€¬Y•Ñ½ÈÈ À°´Èà¤°€ÔĞ°½±½È Ä¸À°À¸Ğà°À¸Äà°À¸ÀÌÔ¥˜}¥Í}¹¥¡Ğ ¤•±Í”€À¸ÀÄ¤¤(€€€Ù…ÈÑ•¹Ğ€èôA…­•‘Y•Ñ½ÈÉÉÉ…ä¡mY•Ñ½ÈÈ àÌÔ°ÈÜà¤±Y•Ñ½ÈÈ äÀÀ°ÈÀÔ¤±Y•Ñ½ÈÈ äÜÀ°ÈÜà¥t¤(€€€‘É…İ}½±½É•‘}Á½±å½¸¡Ñ•¹Ğ°…¹Ù…Ì¤(€€€‘É…İ}Á½±å±¥¹”¡A…­•‘Y•Ñ½ÈÉÉÉ…ä¡mY•Ñ½ÈÈ àÌÔ°ÈÜà¤±Y•Ñ½ÈÈ äÀÀ°ÈÀÔ¤±Y•Ñ½ÈÈ äÜÀ°ÈÜà¥t¤°½±½È ˆŒØàÑ„ÌÔˆ¤°€Ğ¸À¤(€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ äÀÀ°ÈÀÄ¤±Y•Ñ½ÈÈ äÀÀ°ÈàÀ¤±½±½È ˆŒĞäÌĞÈäˆ¤°Ì¸À¤(€€€‘É…İ}½±½É•‘}Á½±å½¸¡A…­•‘Y•Ñ½ÈÉÉÉ…ä¡mY•Ñ½ÈÈ äÀÀ°ÈÜà¤±Y•Ñ½ÈÈ äÀÀ°ÈÌÈ¤±Y•Ñ½ÈÈ äÈä°ÈÜà¥t¤±½±½È ˆŒÍˆÌÀÉ„ˆ¤¤(€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ äÀÀ°ÈÀÔ¤°Y•Ñ½ÈÈ àÄà°ÈàÄ¤°½±½È ˆÁ„ĞÜÜˆ¤°€Ä¸Ô¤(€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ äÀÀ°ÈÀÔ¤°Y•Ñ½ÈÈ äàØ°ÈàÄ¤°½±½È ˆÁ„ĞÜÜˆ¤°€Ä¸Ô¤(€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ àÄÜ°ÈàÄ¤°€È¸Ô°½±½È ˆŒåˆÜäÔàˆ¤¤(€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ äàÜ°ÈàÄ¤°€È¸Ô°½±½È ˆŒåˆÜäÔàˆ¤¤()™Õ¹Œ}‘É…İ}™¥É” ¤€´øÙ½¥è(€€€Ù…ÈÍÑÉ•¹Ñ €èô±…µÁ˜¡™¥É•}¡•…Ğ°À¸À°Ä¸À¤(€€€¥˜ÍÑÉ•¹Ñ €ø€À¸ÀÌè(€€€€€€€™½ÈÉ…‘¥ÕÌ¥¸É…¹” ØÈ°ÈÀ°´Ø¤è(€€€€€€€€€€€‘É…İ}¥É±”¡%I}A=L­Y•Ñ½ÈÈ À°Ü¤±É…‘¥ÕÌ©ÍÑÉ•¹Ñ ±½±½È Ä¸À°À¸ĞÈ°À¸Ä°À¸ÀÄĞ©ÍÑÉ•¹Ñ ¤¤(€€€Ù…ÈÉ½Õ¹‘}…¹¡½È€èô%I}A=L€¬Y•Ñ½ÈÈ À°Äà¤(€€€Ù…È‰…Í•}Í¥é”€èô%I}	M¹•Ñ}Í¥é” ¤(€€€‘É…İ}Ñ•áÑÕÉ”¡%I}	M±É½Õ¹‘}…¹¡½ÈµY•Ñ½ÈÈ¡‰…Í•}Í¥é”¹à¨¸Ô±‰…Í•}Í¥é”¹ä¤¤(€€€¥˜ÍÑÉ•¹Ñ €ø€À¸ÀÌÔè(€€€€€€€Ù…È™±…µ”èQ•áÑÕÉ”É€ô15}I5Mm¥¹Ğ¡Ù¥ÍÕ…±}Ñ¥µ”¨Ô¸À¤•15}I5L¹Í¥é” ¥t(€€€€€€€Ù…È™±…µ•}Í¥é”€èô™±…µ”¹•Ñ}Í¥é” ¤(€€€€€€€Ù…È™±…µ•}Í…±”€èô±•ÉÁ˜ À¸ÌĞ°Ä¸À±ÍÑÉ•¹Ñ ¤(€€€€€€€‘É…İ}Í•Ñ}ÑÉ…¹Í™½É´¡É½Õ¹‘}…¹¡½ÈµY•Ñ½ÈÈ À°ÄÀ¤°À¸À±Y•Ñ½ÈÈ¡™±…µ•}Í…±”±™±…µ•}Í…±”¤¤(€€€€€€€‘É…İ}Ñ•áÑÕÉ”¡™±…µ”±Y•Ñ½ÈÈ µ™±…µ•}Í¥é”¹à¨¸Ô°µ™±…µ•}Í¥é”¹ä¤¤(€€€€€€€‘É…İ}Í•Ñ}ÑÉ…¹Í™½É´¡Y•Ñ½ÈÈ¹iI<°À¸À±Y•Ñ½ÈÈ¹=9¤(€€€Ù…ÈÍµ½­•}…µ½Õ¹Ğ€èô±…µÁ˜¡™¥É•}İ•Ñ¹•ÍÌ¨Ä¸Ğ¬ Ä¸ÀµÍÑÉ•¹Ñ ¤¨À¸ÌÔ°À¸Àà°Ä¸À¤(€€€™½È¤¥¸É…¹” Ô¤è(€€€€€€€Ù…È±¥™”€èô™µ½¡Ù¥ÍÕ…±}Ñ¥µ”¨ À¸ÀÜ­™¥É•}İ•Ñ¹•ÍÌ¨¸ÀĞ¤­™±½…Ğ¡¤¤¨À¸È°Ä¸À¤(€€€€€€€Ù…ÈÍµ½­”€èôÉ½Õ¹‘}…¹¡½È­Y•Ñ½ÈÈ¡Í¥¸¡±¥™”¨Ô¸À­¤¤¨ÄÀ¸À°´ÈÔ¸Àµ±¥™”¨àÈ¸À¤(€€€€€€€‘É…İ}¥É±”¡Íµ½­”° Ì¸À­±¥™”¨ÄÀ¸À¤©Íµ½­•}…µ½Õ¹Ğ±½±½È À¸ØÈ°À¸ØĞ°À¸ØĞ° Ä¸Àµ±¥™”¤¨À¸Äà©Íµ½­•}…µ½Õ¹Ğ¤¤(€€€¥˜ÍÑÉ•¹Ñ €ø€À¸ÀÔè(€€€€€€€™½È¤¥¸É…¹” Ø¤è(€€€€€€€€€€€Ù…È•µ‰•È€èô™µ½¡Ù¥ÍÕ…±}Ñ¥µ”¨À¸Ì­™±½…Ğ¡¤¤¨À¸ÄØ°Ä¸À¤(€€€€€€€€€€€‘É…İ}¥É±”¡%I}A=L­Y•Ñ½ÈÈ¡Í¥¸¡™±½…Ğ¡¤¤¨à¸À¤¨ÄÈ¸À°´ÄÈµ•µ‰•È¨ĞÔ¤°Ä¸È±½±½È Ä¸À°À¸ØÔ°À¸Äà° Ä¸Àµ•µ‰•È¤©ÍÑÉ•¹Ñ ¤¤()™Õ¹Œ}‘É…İ}…•¹Ğ¡…•¹Ğè¥Ñ¥½¹…Éä¤€´øÙ½¥è(€€€Ù…ÈÁ½ÌèY•Ñ½ÈÈ€ô…•¹Ğ¹Á½Ì(€€€Ù…ÈÍ±••Á¥¹œè‰½½°€ô…•¹Ğ¹ÍÑ…Ñ”€ôô€‰Í±••Àˆ…¹Á½Ì¹‘¥ÍÑ…¹•}Ñ¼¡…•¹Ğ¹Ñ…É•Ğ¤€ğ€à¸À(€€€Ù…Èµ½Ù¥¹œè‰½½°€ô…•¹Ğ¹Á½Ì¹‘¥ÍÑ…¹•}Ñ¼¡…•¹Ğ¹Ñ…É•Ğ¤€ø€Ì¸À(€€€Ù…Èİ…±­}™É…µ”€èô¥¹Ğ¡Ù¥ÍÕ…±}Ñ¥µ”€¨€ à¸À¥˜…•¹Ğ¹‘½œ•±Í”€Ø¸À¤¤€”€Ğ(€€€Ù…È‰É•…Ñ¡¥¹œ€èôÍ¥¸¡Ù¥ÍÕ…±}Ñ¥µ”€¨€ Ä¸È¥˜…•¹Ğ¹‘½œ•±Í”€À¸ÜÔ¤€¬Á½Ì¹à€¨€À¸ÀÈ¤€¨€À¸à(€€€Á½Ì¹ä€¬ô€ ´Ä¸À¥˜µ½Ù¥¹œ…¹İ…±­}™É…µ”€”€È€ôô€Ä•±Í”‰É•…Ñ¡¥¹œ¤(€€€Ù…ÈÑ•áÑÕÉ”èQ•áÑÕÉ”É(€€€Ù…ÈÁ½Í”€èô€‰¥‘±”ˆ(€€€¥˜…•¹Ğ¹‘½œè(€€€€€€€¥˜Í±••Á¥¹œè(€€€€€€€€€€€Á½Í”€ô€‰Í±••Àˆ(€€€€€€€•±¥˜…•¹Ğ¹ÍÑ…Ñ”€ôô€‰Í¥Ğˆè(€€€€€€€€€€€Á½Í”€ô€‰É•ÍĞˆ(€€€€€€€•±¥˜µ½Ù¥¹œè(€€€€€€€€€€€Á½Í”€ô€‰¥‘±”ˆ(€€€€€€€•±¥˜…•¹Ğ¹ÍÑ…Ñ”€ôô€‰Í¡•±Ñ•Èˆè(€€€€€€€€€€€Á½Í”€ô€‰Í¥Ğˆ(€€€€€€€Ñ•áÑÕÉ”€ô5%1=}MAI%QMmÁ½Í•t(€€€€€€€¥˜µ½Ù¥¹œè(€€€€€€€€€€€Ñ•áÑÕÉ”€ô5%1=}]1-}I5Mmİ…±­}™É…µ•t(€€€•±Í”è(€€€€€€€¥˜Í±••Á¥¹œè(€€€€€€€€€€€Á½Í”€ô€‰Í±••Àˆ(€€€€€€€•±¥˜…•¹Ğ¹ÍÑ…Ñ”€ôô€‰‰É•…­¥¹}‰É…¹ ˆè(€€€€€€€€€€€Ù…È…Ñ¡•É}ÁÉ½É•ÍÌ€èô±…µÁ˜  È¸àµ™±½…Ğ¡…•¹Ğ¹¥¹Ñ•É…Ñ¥½¸¤¤¼È¸à°À¸À°À¸äää¤(€€€€€€€€€€€Ù…È…Ñ¡•É}¥¹‘•à€èôµ¥¹¤ È±¥¹Ğ¡…Ñ¡•É}ÁÉ½É•ÍÌ¨Ì¸À¤¤(€€€€€€€€€€€Ñ•áÑÕÉ”€ô9=I}Q!I}I5Mm…Ñ¡•É}¥¹‘•át¥˜…•¹Ğ¹¹…µ”€ôô€‰9½É„ˆ•±Í”=QQ=}Q!I}I5Mm…Ñ¡•É}¥¹‘•át(€€€€€€€•±¥˜µ½Ù¥¹œè(€€€€€€€€€€€Á½Í”€ô€‰¥‘±”ˆ(€€€€€€€•±¥˜…•¹Ğ¹ÍÑ…Ñ”€ôô€‰Í¥Ğˆè(€€€€€€€€€€€Á½Í”€ô€‰Í¥Ğˆ(€€€€€€€•±¥˜…•¹Ğ¹ÍÑ…Ñ”€ôô€‰•…Ğˆè(€€€€€€€€€€€Á½Í”€ô€‰Í¥Ğˆ(€€€€€€€•±¥˜…•¹Ğ¹ÍÑ…Ñ”¥¸l‰™••‘}™¥É”ˆ°‰…‘‘¥¹}İ½½ˆ°‰É•±¥¡Ñ¥¹œ‰tè(€€€€€€€€€€€Á½Í”€ô€‰İ…É´ˆ¥˜…•¹Ğ¹¹…µ”€ôô€‰9½É„ˆ•±Í”€‰Ñ•¹ˆ(€€€€€€€¥˜Ñ•áÑÕÉ”€ôô¹Õ±°è(€€€€€€€€€€€Ñ•áÑÕÉ”€ô9=I}MAI%QMmÁ½Í•t¥˜…•¹Ğ¹¹…µ”€ôô€‰9½É„ˆ•±Í”=QQ=}MAI%QMmÁ½Í•t(€€€€€€€¥˜µ½Ù¥¹œ…¹…•¹Ğ¹ÍÑ…Ñ”€„ô€‰‰É•…­¥¹}‰É…¹ ˆè(€€€€€€€€€€€Ñ•áÑÕÉ”€ô9=I}]1-}I5Mmİ…±­}™É…µ•t¥˜…•¹Ğ¹¹…µ”€ôô€‰9½É„ˆ•±Í”=QQ=}]1-}I5Mmİ…±­}™É…µ•t(€€€Ù…ÈÍ¡•±Ñ•É}…±Á¡„€èô€Ä¸À(€€€¥˜É…¥¹¥¹œ…¹…•¹Ğ¹ÍÑ…Ñ”€ôô€‰Í¡•±Ñ•Èˆè(€€€€€€€Í¡•±Ñ•É}…±Á¡„€ô±…µÁ˜¡…•¹Ğ¹Á½Ì¹‘¥ÍÑ…¹•}Ñ¼¡…•¹Ğ¹Ñ…É•Ğ¤€¼€ÈÀ¸À°À¸À°Ä¸À¤(€€€€€€€¥˜Í¡•±Ñ•É}…±Á¡„€ğô€À¸ÀÈè(€€€€€€€€€€€É•ÑÕÉ¸(€€€Ù…ÈÍÁÉ¥Ñ•}Í¥é”€èôÑ•áÑÕÉ”¹•Ñ}Í¥é” ¤(€€€Ù…È™±¥À€èô€´Ä¸À¥˜…•¹Ğ¹™…¥¹œ€ğ€À¸À…¹¹½ĞÍ±••Á¥¹œ•±Í”€Ä¸À(€€€‘É…İ}Í•Ñ}ÑÉ…¹Í™½É´¡Á½Ì€¬Y•Ñ½ÈÈ À°€ÄÌ¤°€À¸À°Y•Ñ½ÈÈ¡™±¥À°Ä¸À¤¤(€€€‘É…İ}Ñ•áÑÕÉ”¡Ñ•áÑÕÉ”°Y•Ñ½ÈÈ µÍÁÉ¥Ñ•}Í¥é”¹à€¨€À¸Ô°€µÍÁÉ¥Ñ•}Í¥é”¹ä¤±½±½È Ä°Ä°Ä±Í¡•±Ñ•É}…±Á¡„¤¤(€€€¥˜…•¹Ğ¹…ÉÉå¥¹œ…¹µ½Ù¥¹œ…¹¹½Ğ…•¹Ğ¹‘½œè(€€€€€€€Ù…È‰Õ¹‘±•}Í¥é”€èô	I9!}	U91¹•Ñ}Í¥é” ¤(€€€€€€€‘É…İ}Ñ•áÑÕÉ”¡	I9!}	U91±Y•Ñ½ÈÈ µ‰Õ¹‘±•}Í¥é”¹à¨¸Ô¬Ô°µ‰Õ¹‘±•}Í¥é”¹ä´ÈÌ¤±½±½È Ä°Ä°Ä±Í¡•±Ñ•É}…±Á¡„¤¤(€€€‘É…İ}Í•Ñ}ÑÉ…¹Í™½É´¡Y•Ñ½ÈÈ¹iI<°À¸À±Y•Ñ½ÈÈ¹=9¤(€€€¥˜Í±••Á¥¹œè(€€€€€€€Ù…Èé}Á½Ì€èôÁ½Ì€¬Y•Ñ½ÈÈ¡ÍÁÉ¥Ñ•}Í¥é”¹à¨¸Èà°µÍÁÉ¥Ñ•}Í¥é”¹ä´Ì¤(€€€€€€€‘É…İ}ÍÑÉ¥¹œ¡Q¡•µ•¹™…±±‰…­}™½¹Ğ±é}Á½Ì°‰èˆ±!=I%i=9Q1}1%959Q}1P°´Ä°ÄÄ±½±½È Ä°Ä°À¸àØ°À¸Ôà¤¤()™Õ¹Œ}‘É…İ}•±±¥ÁÍ•}Í¡…Á”¡•¹Ñ•ÈèY•Ñ½ÈÈ°É…‘¥¤èY•Ñ½ÈÈ°½±½Èè½±½È¤€´øÙ½¥è(€€€Ù…ÈÁ½¥¹ÑÌ€èôA…­•‘Y•Ñ½ÈÉÉÉ…ä ¤(€€€™½È¤¥¸É…¹” ÈĞ¤è(€€€€€€€Ù…È„€èôQT€¨™±½…Ğ¡¤¤€¼€ÈĞ¸À(€€€€€€€Á½¥¹ÑÌ¹…ÁÁ•¹¡•¹Ñ•È€¬Y•Ñ½ÈÈ¡½Ì¡„¤©É…‘¥¤¹à±Í¥¸¡„¤©É…‘¥¤¹ä¤¤(€€€‘É…İ}½±½É•‘}Á½±å½¸¡Á½¥¹ÑÌ±½±½È¤()™Õ¹Œ}‘É…İ}É…¥¸ ¤€´øÙ½¥è(€€€Ù…ÈĞ€èôQ¥µ”¹•Ñ}Ñ¥­Í}µÍ•Œ ¤€¨€À¸ÈÔ(€€€™½È¤¥¸É…¹” ÜÔ¤è(€€€€€€€Ù…Èà€èô™µ½¡™±½…Ğ¡¤€¨€àÌ¤€¬Ğ°]=I1}]%Q €¬€ĞÀ¸À¤€´€ÈÀ¸À(€€€€€€€Ù…Èä€èô™µ½¡™±½…Ğ¡¤€¨€ĞÜ¤€¬Ğ€¨€Ä¸Ü°€ÌÄÔ¸À¤(€€€€€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ¡à±ä¤±Y•Ñ½ÈÈ¡à´Ü±ä¬ÄØ¤±½±½È À¸ÜÔ°À¸àØ°À¸äÈ°À¸Ğà¤°Ä¸È¤()™Õ¹Œ}‘É…İ}±¥Ù¥¹}‘•Ñ…¥±Ì ¤€´øÙ½¥è(€€€™½Èà¥¸É…¹” ĞÈÀ°€àÜÔ°€ÌÄ¤è(€€€€€€€Ù…È‰…Í”€èôY•Ñ½ÈÈ¡à°€ÌĞÜ€¬™µ½¡™±½…Ğ¡à¤°€Ô¸À¤¤(€€€€€€€Ù…ÈÍİ…ä€èôÍ¥¸¡Ù¥ÍÕ…±}Ñ¥µ”€¨€À¸Ô€¬à€¨€À¸Àä¤€¨€Ä¸Ô(€€€€€€€‘É…İ}±¥¹”¡‰…Í”±‰…Í”­Y•Ñ½ÈÈ¡Íİ…ä´È°´Ü¤±½±½È À¸ÌĞ°À¸Ğà°À¸ÈÔ°À¸ÜÔ¤°Ä¸À¤(€€€™½È¤¥¸É…¹” Ì¤è(€€€€€€€Ù…Èµ½Ñ”€èô™µ½¡Ù¥ÍÕ…±}Ñ¥µ”€¨€ À¸ÀÄà€¬¤¨¸ÀÀĞ¤€¬¤¨¸ÌÄ°Ä¸À¤(€€€€€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ ÔÀÔ­¤¨ÄÈà€¬Í¥¸¡Ù¥ÍÕ…±}Ñ¥µ”¨¸Ü­¤¤¨ÄÈ°ÈàØµµ½Ñ”¨ÌÈ¤°Ä¸À±½±½È Ä¸À°À¸ÜĞ°À¸ÈÔ° Ä¸Àµµ½Ñ”¤¨¸ĞÔ¤¤(€€€¥˜}¥Í}¹¥¡Ğ ¤è(€€€€€€€Ù…ÈÍÑ…É}å±”€èô™µ½¡Ù¥ÍÕ…±}Ñ¥µ”°ÈÌ¸À¤(€€€€€€€¥˜ÍÑ…É}å±”€ğ€Ä¸Ğè(€€€€€€€€€€€Ù…ÈÍÑ…É}Á½Ì€èôY•Ñ½ÈÈ äÌÀ¸À­ÍÑ…É}å±”¨ÜÀ¸À°ÜØ¸À­ÍÑ…É}å±”¨ÈÈ¸À¤(€€€€€€€€€€€‘É…İ}±¥¹”¡ÍÑ…É}Á½Ì±ÍÑ…É}Á½ÌµY•Ñ½ÈÈ Äà°Ø¤±½±½È À¸äÔ°À¸äÌ°À¸ÜØ°Ä¸ÀµÍÑ…É}å±”¼Ä¸Ğ¤°Ä¸È¤(€€€•±¥˜¹½ĞÉ…¥¹¥¹œè(€€€€€€€Ù…È‰¥É‘}à€èô™µ½¡Ù¥ÍÕ…±}Ñ¥µ”¨ä¸À°ÄĞÔÀ¸À¤´àÀ¸À(€€€€€€€‘É…İ}…ÉŒ¡Y•Ñ½ÈÈ¡‰¥É‘}à°äÈ¤°Ü±A$¬À¸È±QT´À¸È°Ü±½±½È À¸ÄØ°À¸ÈÀ°À¸ÈÌ°À¸ÔÔ¤°Ä¸Ä¤(€€€€€€€‘É…İ}…ÉŒ¡Y•Ñ½ÈÈ¡‰¥É‘}à¬ÄÌ°äÈ¤°Ü±A$¬À¸È±QT´À¸È°Ü±½±½È À¸ÄØ°À¸ÈÀ°À¸ÈÌ°À¸ÔÔ¤°Ä¸Ä¤(€€€¥˜É…¥¹¥¹œè(€€€€€€€™½È¤¥¸É…¹” Ğ¤è(€€€€€€€€€€€Ù…ÈÉ¥ÁÁ±”€èô™µ½¡Ù¥ÍÕ…±}Ñ¥µ”¨¸Ü­™±½…Ğ¡¤¤¨¸ÈĞ°Ä¸À¤(€€€€€€€€€€€‘É…İ}…ÉŒ¡Y•Ñ½ÈÈ ÌÔÀ­¤¨ÄäÀ°ÌÔÀ¤°Ì¸À­É¥ÁÁ±”¨ÄÌ¸À°À±QT°ÈĞ±½±½È À¸ØÔ°À¸Üà°À¸àĞ° Ä¸ÀµÉ¥ÁÁ±”¤¨¸ÌÔ¤°Ä¸À¤()™Õ¹Œ}‘É…İ}™½É•É½Õ¹‘}‘•Ñ…¥±Ì ¤€´øÙ½¥è(€€€™½Èà¥¸É…¹” ÄĞ°€ÄÈÜÀ°€Äà¤è(€€€€€€€Ù…ÈÍİ…ä€èôÍ¥¸¡Ù¥ÍÕ…±}Ñ¥µ”€¨€À¸Ğà€¬à€¨€À¸ÀÜ¤€¨€È¸È(€€€€€€€Ù…È‰…Í”€èôY•Ñ½ÈÈ¡à°I=U9}d€¬€à€¬™µ½¡™±½…Ğ¡à€¨€Ü¤°€ÄĞ¸À¤¤(€€€€€€€‘É…İ}±¥¹”¡‰…Í”°‰…Í”€¬Y•Ñ½ÈÈ ´Ì€¬Íİ…ä°€´ÄÄ€´™µ½¡™±½…Ğ¡à¤°€Ü¸À¤¤°½±½È ˆŒØààÀÔÈˆ¤¹‘…É­•¹•  Ä¸Àµ}‘…å±¥¡Ñ}…µ½Õ¹Ğ ¤¤¨¸Ğ¤°€Ä¸Ğ¤(€€€™½ÈÀ¥¸mY•Ñ½ÈÈ ÈàÀ°ÈàÔ¤±Y•Ñ½ÈÈ ÌÈØ°ÈäÀ¤±Y•Ñ½ÈÈ ÄÀÌà°ÈàØ¤±Y•Ñ½ÈÈ ÄÀàà°ÈäÈ¤±Y•Ñ½ÈÈ ĞĞÀ°ÈàÜ¥tè(€€€€€€€‘É…İ}±¥¹”¡À±À­Y•Ñ½ÈÈ¡Í¥¸¡Ù¥ÍÕ…±}Ñ¥µ”¨¸Ğ­À¹à¤¨Ä¸Ô°´ÄÀ¤±½±½È ˆŒÔÔÜÄĞÜˆ¤°Ä¸Ô¤(€€€€€€€‘É…İ}¥É±”¡À­Y•Ñ½ÈÈ À°´ÄÈ¤°È¸È±½±½È ˆÑ„ĞÑ”ˆ¥˜¥¹Ğ¡À¹à¤”Ì•±Í”€ˆåŒå„Ôˆ¤¤(€€€™½ÈÀ¥¸mY•Ñ½ÈÈ ÌàÔ°ÈäÌ¤±Y•Ñ½ÈÈ ÜäÔ°ÈäÈ¤±Y•Ñ½ÈÈ ÄÀÄÀ°Èää¥tè(€€€€€€€‘É…İ}¥É±”¡À°à±½±½È ˆŒÍŒĞÔĞÀˆ¤¤(€€€€€€€‘É…İ}…ÉŒ¡À°à±A$±QT°à±½±½È ˆŒØĞÙ„ØÀˆ¤°Ä¸Ì¤(€€€€Œ¥É”É¥¹œ°Í•…ÑÌ…¹„™•Ü±¥Ù•µ¥¸…µÀÑÉ…•Ì¸(€€€™½È…¹±”¥¸É…¹” À°€ÌØÀ°€ĞÔ¤è(€€€€€€€Ù…ÈÉ…€èô‘•}Ñ½}É…¡™±½…Ğ¡…¹±”¤¤(€€€€€€€Ù…ÈÉ½¬€èô%I}A=L€¬Y•Ñ½ÈÈ¡½Ì¡É…¤€¨€ÈĞ¸À°€ÄÜ¸À€¬Í¥¸¡É…¤€¨€Ü¸À¤(€€€€€€€‘É…İ}¥É±”¡É½¬°€Ğ¸Ô°½±½È ˆŒÕˆÕ„ÑŒˆ¤¤(€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ ÔÔÔ°ÈàØ¤°Y•Ñ½ÈÈ ØÀà°Èàä¤°½±½È ˆŒÕ„ÌäÈÔˆ¤°€ÄÀ¸À¤(€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ ØÀà°Èàä¤°€Ô¸À°½±½È ˆ„ÀÜÄĞÌˆ¤¤(€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ ÜÀØ°ÈäÄ¤°Y•Ñ½ÈÈ ÜÔÄ°ÈàÜ¤°½±½È ˆŒÔÌÌÔÈÌˆ¤°€ä¸À¤(€€€‘É…İ}¥É±”¡Y•Ñ½ÈÈ ÜÀØ°ÈäÄ¤°€Ğ¸Ô°½±½È ˆŒäÔØàÍ˜ˆ¤¤(€€€™½Èà¥¸lÈÀÔ°€ÈÈÌ°€ÄÀàÈ°€ÄÄÀÁtè(€€€€€€€‘É…İ}±¥¹”¡Y•Ñ½ÈÈ¡à°ÈäÈ¤±Y•Ñ½ÈÈ¡à¬ÄÜ°ÈàÈ¤±½±½È ˆŒÜÈÔÀÌàˆ¤°Ì¸À¤()™Õ¹Œ}‘É…İ}İ¡¥ÍÁ•É}Ñ•áĞ ¤€´øÙ½¥è(€€€¥˜ÍÑ½Éå}Ñ¥µ•È€ğô€À¸Àè(€€€€€€€É•ÑÕÉ¸(€€€Ù…È…±Á¡„€èô±…µÁ˜¡ÍÑ½Éå}Ñ¥µ•È€¼€È¸À°À¸À°Ä¸À¤(€€€Ù…ÈÑ•áĞ€èô€‰…œ€•€ƒ
+Ü€€•Ìˆ€”m‘…å}¹Õµ‰•È°ÍÑ½Éå}±¥¹•t(€€€Ù…Èİ¥‘Ñ €èôQ¡•µ•¹™…±±‰…­}™½¹Ğ¹•Ñ}ÍÑÉ¥¹}Í¥é”¡Ñ•áĞ±!=I%i=9Q1}1%959Q}1P°´Ä°ÄØ¤¹à(€€€‘É…İ}ÍÑÉ¥¹œ¡Q¡•µ•¹™…±±‰…­}™½¹Ğ±Y•Ñ½ÈÈ ¡]=I1}]%Q µİ¥‘Ñ ¤¨À¸Ô°ÌÈ¤±Ñ•áĞ±!=I%i=9Q1}1%959Q}1P°´Ä°ÄØ±½±½È À¸äØ°À¸äĞ°À¸àÔ±…±Á¡„¤¤()™Õ¹Œ}Í…Ù•}İ½É± ¤€´øÙ½¥è(€€€Ù…È™œ€èô½¹™¥¥±”¹¹•Ü ¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰Ñ¥µ”ˆ±İ½É±‘}Ñ¥µ”¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰‘…äˆ±‘…å}¹Õµ‰•È¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰™¥É•}™Õ•°ˆ±™¥É•}™Õ•°¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰™¥É•}¡•…Ğˆ±™¥É•}¡•…Ğ¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰™¥É•}İ•Ñ¹•ÍÌˆ±™¥É•}İ•Ñ¹•ÍÌ¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰ÍÑ½É•‘}‰É…¹¡•Ìˆ±ÍÑ½É•‘}‰É…¹¡•Ì¤(€€€™½È¤¥¸É…¹”¡‰É…¹¡}Í½ÕÉ•Ì¹Í¥é” ¤¤è(€€€€€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰‰É…¹¡|•ˆ€”¤±™±½…Ğ¡‰É…¹¡}Í½ÕÉ•Ím¥t¹…µ½Õ¹Ğ¤¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰Õ¹¥á}Ñ¥µ”ˆ±Q¥µ”¹•Ñ}Õ¹¥á}Ñ¥µ•}™É½µ}ÍåÍÑ•´ ¤¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰¹½É…}½ÑÑ½}‰½¹ˆ±¹½É…}½ÑÑ½}‰½¹¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰µ¥±½}…ÑÑ…¡µ•¹Ğˆ±µ¥±½}…ÑÑ…¡µ•¹Ğ¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰•Ù•¹Ñ}¡¥ÍÑ½Éäˆ±•Ù•¹Ñ}¡¥ÍÑ½Éä¤(€€€™œ¹Í•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰É•µ•µ‰•É•‘}µ½µ•¹ÑÌˆ±É•µ•µ‰•É•‘}µ½µ•¹ÑÌ¤(€€€™½È¤¥¸É…¹”¡…•¹ÑÌ¹Í¥é” ¤¤è(€€€€€€€™œ¹Í•Ñ}Ù…±Õ” ‰…•¹Ñ|•ˆ€”¤°‰Á½Í¥Ñ¥½¸ˆ±…•¹ÑÍm¥t¹Á½Ì¤(€€€€€€€™œ¹Í•Ñ}Ù…±Õ” ‰…•¹Ñ|•ˆ€”¤°‰•¹•Éäˆ±…•¹ÑÍm¥t¹•¹•Éä¤(€€€€€€€™œ¹Í•Ñ}Ù…±Õ” ‰…•¹Ñ|•ˆ€”¤°‰¡Õ¹•Èˆ±…•¹ÑÍm¥t¹¡Õ¹•È¤(€€€™œ¹Í…Ù”¡MY}AQ ¤()™Õ¹Œ}±½…‘}İ½É± ¤€´øÙ½¥è(€€€Ù…È™œ€èô½¹™¥¥±”¹¹•Ü ¤(€€€¥˜™œ¹±½…¡MY}AQ ¤€„ô=,è(€€€€€€€É•ÑÕÉ¸(€€€İ½É±‘}Ñ¥µ”€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰Ñ¥µ”ˆ±İ½É±‘}Ñ¥µ”¤¤(€€€‘…å}¹Õµ‰•È€ô¥¹Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰‘…äˆ±‘…å}¹Õµ‰•È¤¤(€€€™¥É•}™Õ•°€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰™¥É•}™Õ•°ˆ±™¥É•}™Õ•°¤¤(€€€™¥É•}¡•…Ğ€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰™¥É•}¡•…Ğˆ±™¥É•}¡•…Ğ¤¤(€€€™¥É•}İ•Ñ¹•ÍÌ€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰™¥É•}İ•Ñ¹•ÍÌˆ±™¥É•}İ•Ñ¹•ÍÌ¤¤(€€€ÍÑ½É•‘}‰É…¹¡•Ì€ô¥¹Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰ÍÑ½É•‘}‰É…¹¡•Ìˆ±ÍÑ½É•‘}‰É…¹¡•Ì¤¤(€€€™½È¤¥¸É…¹”¡‰É…¹¡}Í½ÕÉ•Ì¹Í¥é” ¤¤è(€€€€€€€‰É…¹¡}Í½ÕÉ•Ím¥t¹…µ½Õ¹Ğ€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰‰É…¹¡|•ˆ€”¤±‰É…¹¡}Í½ÕÉ•Ím¥t¹…µ½Õ¹Ğ¤¤(€€€¹½É…}½ÑÑ½}‰½¹€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰¹½É…}½ÑÑ½}‰½¹ˆ±¹½É…}½ÑÑ½}‰½¹¤¤(€€€µ¥±½}…ÑÑ…¡µ•¹Ğ€ô™œ¹•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰µ¥±½}…ÑÑ…¡µ•¹Ğˆ±µ¥±½}…ÑÑ…¡µ•¹Ğ¤(€€€Ù…È±½…‘•‘}¡¥ÍÑ½ÉäèÉÉ…ä€ô™œ¹•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰•Ù•¹Ñ}¡¥ÍÑ½Éäˆ±mt¤(€€€•Ù•¹Ñ}¡¥ÍÑ½Éä¹…ÍÍ¥¸¡±½…‘•‘}¡¥ÍÑ½Éä¤(€€€É•µ•µ‰•É•‘}µ½µ•¹ÑÌ€ô™œ¹•Ñ}Ù…±Õ” ‰ÍÑ½Éäˆ°‰É•µ•µ‰•É•‘}µ½µ•¹ÑÌˆ±É•µ•µ‰•É•‘}µ½µ•¹ÑÌ¤(€€€Ù…ÈÑ¡•¸€èô¥¹Ğ¡™œ¹•Ñ}Ù…±Õ” ‰İ½É±ˆ°‰Õ¹¥á}Ñ¥µ”ˆ±Q¥µ”¹•Ñ}Õ¹¥á}Ñ¥µ•}™É½µ}ÍåÍÑ•´ ¤¤¤(€€€Ù…È•±…ÁÍ•€èô±…µÁ¤¡¥¹Ğ¡Q¥µ”¹•Ñ}Õ¹¥á}Ñ¥µ•}™É½µ}ÍåÍÑ•´ ¤¤€´Ñ¡•¸°À°àØĞÀÀ€¨€Ü¤(€€€İ½É±‘}Ñ¥µ”€¬ô™±½…Ğ¡•±…ÁÍ•¤€¼e}M=9L(€€€‘…å}¹Õµ‰•È€¬ô¥¹Ğ¡™±½½È¡İ½É±‘}Ñ¥µ”¤¤(€€€İ½É±‘}Ñ¥µ”€ô™µ½¡İ½É±‘}Ñ¥µ”°Ä¸À¤(€€€™¥É•}™Õ•°€ôµ…á˜ À¸À±™¥É•}™Õ•°µ•±…ÁÍ•¨¸ÀÀÀÜ¤(€€€™¥É•}¡•…Ğ€ôµ¥¹˜¡™¥É•}¡•…Ğ±±…µÁ˜¡™¥É•}™Õ•°¼Ğ¸À°À¸À°Ä¸À¤¤(€€€™½È¤¥¸É…¹”¡…•¹ÑÌ¹Í¥é” ¤¤è(€€€€€€€…•¹ÑÍm¥t¹Á½Ì€ô™œ¹•Ñ}Ù…±Õ” ‰…•¹Ñ|•ˆ€”¤°‰Á½Í¥Ñ¥½¸ˆ±…•¹ÑÍm¥t¹Á½Ì¤(€€€€€€€¥˜…•¹ÑÍm¥t¹Á½Ì¹ä€ğI=U9}d€´€Äà¸Àè(€€€€€€€€€€€…•¹ÑÍm¥t¹Á½Ì¹ä€ôI=U9}d€¬€ Ü¸À¥˜…•¹ÑÍm¥t¹‘½œ•±Í”€À¸À¤(€€€€€€€…•¹ÑÍm¥t¹Ñ…É•Ğ€ô…•¹ÑÍm¥t¹Á½Ì(€€€€€€€…•¹ÑÍm¥t¹•¹•Éä€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰…•¹Ñ|•ˆ€”¤°‰•¹•Éäˆ±…•¹ÑÍm¥t¹•¹•Éä¤¤(€€€€€€€…•¹ÑÍm¥t¹¡Õ¹•È€ô™±½…Ğ¡™œ¹•Ñ}Ù…±Õ” ‰…•¹Ñ|•ˆ€”¤°‰¡Õ¹•Èˆ±…•¹ÑÍm¥t¹¡Õ¹•È¤¤(€€€}Í…ä ‰Y•É‘•¸¡…È±•Ù•ĞÙ¥‘•É”°µ•¹Ì‘ÔÙ…ÈÛ™¬¸ˆ¤(
