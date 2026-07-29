@@ -1,12 +1,44 @@
+Exit code: 0
+Wall time: 0.9 seconds
+Output:
 extends Node2D
 
 const SAVE_PATH := "user://idlecommand_save.cfg"
 const WORLD_WIDTH := 1280.0
-const GROUND_Y := 278.0
+const GROUND_Y := 334.0
 const DAY_SECONDS := 180.0
-const FIRE_POS := Vector2(650, 260)
-const TENT_POS := Vector2(900, 250)
-const BRANCH_POSITIONS := [Vector2(210, 265), Vector2(330, 267), Vector2(1080, 266)]
+const FIRE_POS := Vector2(650, 322)
+const TENT_POS := Vector2(1000, 326)
+const BRANCH_POSITIONS := [Vector2(215, 329), Vector2(350, 331), Vector2(1110, 329)]
+const CAMP_BACKGROUND := preload("res://assets/camp_sunset.png")
+const NORA_SPRITES := {
+    "idle": preload("res://assets/sprites/nora_idle.png"),
+    "walk": preload("res://assets/sprites/nora_walk.png"),
+    "sit": preload("res://assets/sprites/nora_sit.png"),
+    "warm": preload("res://assets/sprites/nora_warm.png"),
+    "sleep": preload("res://assets/sprites/nora_sleep.png")
+}
+const OTTO_SPRITES := {
+    "idle": preload("res://assets/sprites/otto_idle.png"),
+    "walk": preload("res://assets/sprites/otto_walk.png"),
+    "sit": preload("res://assets/sprites/otto_sit.png"),
+    "tend": preload("res://assets/sprites/otto_tend.png"),
+    "sleep": preload("res://assets/sprites/otto_sleep.png")
+}
+const MILO_SPRITES := {
+    "idle": preload("res://assets/sprites/milo_stand.png"),
+    "walk": preload("res://assets/sprites/milo_trot.png"),
+    "sit": preload("res://assets/sprites/milo_sit.png"),
+    "rest": preload("res://assets/sprites/milo_rest.png"),
+    "sleep": preload("res://assets/sprites/milo_sleep.png")
+}
+const FIRE_FRAMES := [
+    preload("res://assets/sprites/fire_0.png"),
+    preload("res://assets/sprites/fire_1.png"),
+    preload("res://assets/sprites/fire_2.png"),
+    preload("res://assets/sprites/fire_3.png"),
+    preload("res://assets/sprites/fire_4.png")
+]
 
 var world_time := 0.92
 var day_number := 1
@@ -20,6 +52,10 @@ var rng := RandomNumberGenerator.new()
 var visual_time := 0.0
 var capture_requested := false
 var capture_finished := false
+var nora_otto_bond := 0.18
+var milo_attachment := [0.38, 0.32]
+var event_history: Array[String] = []
+var remembered_moments: Dictionary = {}
 
 func _ready() -> void:
     rng.randomize()
@@ -60,6 +96,7 @@ func _process(delta: float) -> void:
     _advance_weather(delta)
     _advance_fire(delta)
     _advance_agents(delta)
+    _advance_relationships(delta)
     story_timer = maxf(0.0, story_timer - delta)
     queue_redraw()
     if capture_requested and not capture_finished and visual_time > 1.0:
@@ -128,16 +165,27 @@ func _choose_action(index: int) -> void:
         agent.state = "sleep"
         agent.target = TENT_POS + Vector2(rng.randf_range(-22, 22), 14)
     elif agent.dog:
-        var person_index := rng.randi_range(0, 1)
+        var person_index := 0 if milo_attachment[0] >= milo_attachment[1] else 1
+        if rng.randf() < 0.28:
+            person_index = 1 - person_index
         agent.state = "follow"
         agent.target = agents[person_index].pos + Vector2(rng.randf_range(-35, 35), 5)
+    elif agent.hunger > 0.72:
+        agent.state = "eat"
+        agent.target = FIRE_POS + Vector2(-45 if index == 0 else 45, 14)
     elif fire_fuel < 3.2 and not agent.carrying:
         agent.state = "gather"
         agent.target = BRANCH_POSITIONS[rng.randi_range(0, BRANCH_POSITIONS.size() - 1)]
     elif agent.carrying:
         agent.state = "feed_fire"
         agent.target = FIRE_POS + Vector2(rng.randf_range(-30, 30), 8)
-    elif _is_night() or rng.randf() < 0.45:
+    elif _is_night() and rng.randf() < 0.16:
+        agent.state = "stargaze"
+        agent.target = Vector2(390 if index == 0 else 1080, GROUND_Y)
+    elif nora_otto_bond > 0.24 and rng.randf() < 0.32:
+        agent.state = "sit"
+        agent.target = FIRE_POS + Vector2(-52 if index == 0 else 52, 9)
+    elif _is_night() or rng.randf() < 0.38:
         agent.state = "sit"
         agent.target = FIRE_POS + Vector2(-58 if index == 0 else 58, 9)
     else:
@@ -170,11 +218,48 @@ func _apply_arrival(index: int, delta: float) -> void:
             agent.decision = maxf(agent.decision, 2.0)
         "sit":
             agent.energy = minf(1.0, agent.energy + delta * 0.004)
+        "eat":
+            agent.hunger = maxf(0.08, agent.hunger - delta * 0.055)
+            agent.energy = minf(1.0, agent.energy + delta * 0.003)
+            if agent.hunger < 0.25:
+                _remember("meal_%d_%s" % [day_number, agent.name], "%s spiser stille ved bålet." % agent.name)
+                agent.state = "sit"
+                agent.decision = rng.randf_range(5.0,9.0)
+        "stargaze":
+            _remember("sky_%d_%s" % [day_number, agent.name], "%s bliver stående lidt under aftenhimlen." % agent.name)
+            agent.state = "watching_sky"
+            agent.decision = rng.randf_range(8.0,14.0)
         "shelter":
             agent.energy = minf(1.0, agent.energy + delta * 0.008)
         _:
             pass
     agents[index] = agent
+
+func _advance_relationships(delta: float) -> void:
+    if agents.size() < 3:
+        return
+    var nora: Dictionary = agents[0]
+    var otto: Dictionary = agents[1]
+    var milo: Dictionary = agents[2]
+    var quietly_together: bool = nora.pos.distance_to(otto.pos) < 92.0 and nora.state in ["sit","eat","shelter"] and otto.state in ["sit","eat","shelter"]
+    if quietly_together:
+        nora_otto_bond = minf(1.0,nora_otto_bond + delta * 0.0012)
+        if nora_otto_bond >= 0.25:
+            _remember("bond_first_fire", "Nora og Otto har fundet deres faste pladser ved bålet.")
+        if nora_otto_bond >= 0.55:
+            _remember("bond_trusted", "Stilheden mellem Nora og Otto føles efterhånden tryg.")
+    for i in range(2):
+        if milo.pos.distance_to(agents[i].pos) < 58.0:
+            milo_attachment[i] = minf(1.0,float(milo_attachment[i]) + delta * 0.0008)
+
+func _remember(key: String, text: String) -> void:
+    if remembered_moments.has(key):
+        return
+    remembered_moments[key] = true
+    event_history.append("Dag %d · %s" % [day_number,text])
+    if event_history.size() > 32:
+        event_history.pop_front()
+    _say(text)
 
 func _is_night() -> bool:
     return world_time < 0.22 or world_time > 0.76
@@ -184,17 +269,31 @@ func _say(text: String) -> void:
     story_timer = 8.0
 
 func _draw() -> void:
-    _draw_sky()
-    _draw_landscape()
-    _draw_far_forest()
-    _draw_tent()
+    _draw_background_art()
     _draw_fire()
     for agent in agents:
         _draw_agent(agent)
     if raining:
         _draw_rain()
-    _draw_foreground_details()
+    _draw_living_details()
     _draw_whisper_text()
+
+func _draw_background_art() -> void:
+    draw_texture_rect(CAMP_BACKGROUND, Rect2(0, 0, 1280, 360), false)
+    # The authored sunset remains the visual anchor while a restrained tint
+    # lets the same landscape breathe through the simulation's daily rhythm.
+    var night_strength := 0.0
+    if world_time < 0.20:
+        night_strength = 1.0 - world_time / 0.20
+    elif world_time > 0.78:
+        night_strength = (world_time - 0.78) / 0.22
+    if night_strength > 0.0:
+        draw_rect(Rect2(0,0,1280,360),Color(0.035,0.07,0.16,night_strength*0.38))
+    elif world_time > 0.22 and world_time < 0.62:
+        draw_rect(Rect2(0,0,1280,360),Color(1.0,0.89,0.68,0.05))
+    if _is_night():
+        for p in [Vector2(132,54),Vector2(258,89),Vector2(446,45),Vector2(706,71),Vector2(904,43),Vector2(1128,82)]:
+            draw_circle(p,1.0 + sin(visual_time*.4+p.x)*.25,Color(1.0,0.94,0.72,0.65))
 
 func _draw_sky() -> void:
     var daylight := _daylight_amount()
@@ -278,16 +377,14 @@ func _draw_tent() -> void:
     draw_circle(Vector2(987,281), 2.5, Color("#9b7958"))
 
 func _draw_fire() -> void:
-    draw_line(FIRE_POS + Vector2(-19,11), FIRE_POS + Vector2(18,20), Color("#4a2d20"), 6.0)
-    draw_line(FIRE_POS + Vector2(19,11), FIRE_POS + Vector2(-18,20), Color("#4a2d20"), 6.0)
     if fire_fuel <= 0.15:
         return
-    var flicker := sin(visual_time * 12.0) * 3.0 + sin(visual_time * 19.0) * 1.5
     var strength := clampf(fire_fuel / 5.0, 0.35, 1.0)
     for radius in range(62, 20, -6):
         draw_circle(FIRE_POS + Vector2(0, -3), radius * strength, Color(1.0,0.42,0.1,0.012))
-    draw_colored_polygon(PackedVector2Array([FIRE_POS+Vector2(-13,12),FIRE_POS+Vector2(-5,-22-flicker),FIRE_POS+Vector2(2,-7),FIRE_POS+Vector2(10,-31+flicker),FIRE_POS+Vector2(15,12)]),Color("#e98232"))
-    draw_colored_polygon(PackedVector2Array([FIRE_POS+Vector2(-7,12),FIRE_POS+Vector2(0,-14+flicker),FIRE_POS+Vector2(8,12)]),Color("#f5d36a"))
+    var frame: Texture2D = FIRE_FRAMES[int(visual_time * 5.0) % FIRE_FRAMES.size()]
+    var fire_size := frame.get_size()
+    draw_texture(frame,FIRE_POS+Vector2(-fire_size.x*.5,20-fire_size.y))
     for i in range(5):
         var life := fmod(visual_time * 0.10 + float(i) * 0.2, 1.0)
         var smoke := FIRE_POS + Vector2(sin(life * 5.0 + i) * 8.0, -30.0 - life * 86.0)
@@ -301,24 +398,39 @@ func _draw_agent(agent: Dictionary) -> void:
     var sleeping: bool = agent.state == "sleep" and pos.distance_to(agent.target) < 8.0
     var breathing := sin(visual_time * (1.2 if agent.dog else 0.75) + pos.x * 0.02) * 0.8
     pos.y += breathing
+    var moving: bool = agent.pos.distance_to(agent.target) > 3.0
+    var texture: Texture2D
+    var pose := "idle"
     if agent.dog:
-        _draw_ellipse_shape(pos + Vector2(0, -8), Vector2(15, 9), agent.color)
-        draw_circle(pos + Vector2(13 * agent.facing, -13), 7, agent.color)
-        var tail_wag := sin(visual_time * 2.2) * (5.0 if agent.state == "follow" else 2.0)
-        draw_line(pos + Vector2(-13 * agent.facing,-11), pos + Vector2((-22-tail_wag) * agent.facing,-20), agent.color, 3.0)
-        if not sleeping:
-            draw_circle(pos + Vector2(16 * agent.facing,-14),1.5,Color("#1d1c18"))
+        if sleeping:
+            pose = "sleep"
+        elif agent.state == "sit":
+            pose = "rest"
+        elif moving:
+            pose = "walk"
+        elif agent.state == "shelter":
+            pose = "sit"
+        texture = MILO_SPRITES[pose]
     else:
-        draw_line(pos + Vector2(-5,0),pos + Vector2(-7,13),Color("#342b29"),4.0)
-        draw_line(pos + Vector2(5,0),pos + Vector2(7,13),Color("#342b29"),4.0)
-        draw_rect(Rect2(pos + Vector2(-10,-30),Vector2(20,31)),agent.color)
-        draw_circle(pos + Vector2(0,-40),10,Color("#e2b28e"))
-        draw_arc(pos + Vector2(0,-43),11,PI,TAU,12,Color("#51372d"),5.0)
-        draw_circle(pos + Vector2(-3 * agent.facing,-40),1.0,Color("#2a211e"))
-        if agent.carrying:
-            draw_line(pos+Vector2(-14,-16),pos+Vector2(-28,-28),Color("#5e4028"),4.0)
+        if sleeping:
+            pose = "sleep"
+        elif moving:
+            pose = "walk"
+        elif agent.state == "sit":
+            pose = "sit"
+        elif agent.state == "eat":
+            pose = "sit"
+        elif agent.state == "feed_fire":
+            pose = "warm" if agent.name == "Nora" else "tend"
+        texture = NORA_SPRITES[pose] if agent.name == "Nora" else OTTO_SPRITES[pose]
+    var sprite_size := texture.get_size()
+    var flip := -1.0 if agent.facing < 0.0 and not sleeping else 1.0
+    draw_set_transform(pos + Vector2(0, 13), 0.0, Vector2(flip,1.0))
+    draw_texture(texture, Vector2(-sprite_size.x * 0.5, -sprite_size.y))
+    draw_set_transform(Vector2.ZERO,0.0,Vector2.ONE)
     if sleeping:
-        draw_string(ThemeDB.fallback_font,pos+Vector2(14,-45),"z",HORIZONTAL_ALIGNMENT_LEFT,-1,14,Color(1,1,1,0.65))
+        var z_pos := pos + Vector2(sprite_size.x*.28,-sprite_size.y-3)
+        draw_string(ThemeDB.fallback_font,z_pos,"z",HORIZONTAL_ALIGNMENT_LEFT,-1,11,Color(1,1,0.86,0.58))
 
 func _draw_ellipse_shape(center: Vector2, radii: Vector2, color: Color) -> void:
     var points := PackedVector2Array()
@@ -333,6 +445,15 @@ func _draw_rain() -> void:
         var x := fmod(float(i * 83) + t, WORLD_WIDTH + 40.0) - 20.0
         var y := fmod(float(i * 47) + t * 1.7, 315.0)
         draw_line(Vector2(x,y),Vector2(x-7,y+16),Color(0.75,0.86,0.92,0.48),1.2)
+
+func _draw_living_details() -> void:
+    for x in range(420, 875, 31):
+        var base := Vector2(x, 347 + fmod(float(x), 5.0))
+        var sway := sin(visual_time * 0.5 + x * 0.09) * 1.5
+        draw_line(base,base+Vector2(sway-2,-7),Color(0.34,0.48,0.25,0.75),1.0)
+    for i in range(3):
+        var mote := fmod(visual_time * (0.018 + i*.004) + i*.31,1.0)
+        draw_circle(Vector2(505+i*128 + sin(visual_time*.7+i)*12,286-mote*32),1.0,Color(1.0,0.74,0.25,(1.0-mote)*.45))
 
 func _draw_foreground_details() -> void:
     for x in range(14, 1270, 18):
@@ -371,6 +492,10 @@ func _save_world() -> void:
     cfg.set_value("world","day",day_number)
     cfg.set_value("world","fire_fuel",fire_fuel)
     cfg.set_value("world","unix_time",Time.get_unix_time_from_system())
+    cfg.set_value("story","nora_otto_bond",nora_otto_bond)
+    cfg.set_value("story","milo_attachment",milo_attachment)
+    cfg.set_value("story","event_history",event_history)
+    cfg.set_value("story","remembered_moments",remembered_moments)
     for i in range(agents.size()):
         cfg.set_value("agent_%d" % i,"position",agents[i].pos)
         cfg.set_value("agent_%d" % i,"energy",agents[i].energy)
@@ -384,6 +509,11 @@ func _load_world() -> void:
     world_time = float(cfg.get_value("world","time",world_time))
     day_number = int(cfg.get_value("world","day",day_number))
     fire_fuel = float(cfg.get_value("world","fire_fuel",fire_fuel))
+    nora_otto_bond = float(cfg.get_value("story","nora_otto_bond",nora_otto_bond))
+    milo_attachment = cfg.get_value("story","milo_attachment",milo_attachment)
+    var loaded_history: Array = cfg.get_value("story","event_history",[])
+    event_history.assign(loaded_history)
+    remembered_moments = cfg.get_value("story","remembered_moments",remembered_moments)
     var then := int(cfg.get_value("world","unix_time",Time.get_unix_time_from_system()))
     var elapsed := clampi(int(Time.get_unix_time_from_system()) - then,0,86400 * 7)
     world_time += float(elapsed) / DAY_SECONDS
@@ -392,8 +522,9 @@ func _load_world() -> void:
     fire_fuel = maxf(0.5,fire_fuel - elapsed * 0.0007)
     for i in range(agents.size()):
         agents[i].pos = cfg.get_value("agent_%d" % i,"position",agents[i].pos)
+        if agents[i].pos.y < GROUND_Y - 18.0:
+            agents[i].pos.y = GROUND_Y + (7.0 if agents[i].dog else 0.0)
         agents[i].target = agents[i].pos
         agents[i].energy = float(cfg.get_value("agent_%d" % i,"energy",agents[i].energy))
         agents[i].hunger = float(cfg.get_value("agent_%d" % i,"hunger",agents[i].hunger))
     _say("Verden har levet videre, mens du var væk.")
-
