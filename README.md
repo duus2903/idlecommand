@@ -14,18 +14,18 @@ The player does not micromanage villagers, click for resources, optimize product
 
 ## Current playable whitebox
 
-The first living camp prototype now includes:
+The first living Nordic Neolithic camp prototype now includes:
 
 - Nora, Otto, and Milo the dog
-- autonomous wandering, branch gathering, fire tending, resting, following, sheltering, and sleeping
+- autonomous wandering, tinder gathering, flint-and-pyrite fire tending, resting, following, sheltering, and sleeping
 - a continuous three-minute day/night cycle
 - changing rain weather
-- a tent and campfire
+- a separate hide-and-reed shelter, craft props, and stateful campfire
 - subtle emergent story messages rather than a permanent HUD
 - local save state and offline world-time progression
 - a wide 1280 × 360 desktop-strip presentation
 
-The visuals are deliberately code-drawn placeholders. This milestone tests whether the world feels alive before final pixel art and desktop-window integration are added.
+The prototype now uses handcrafted-style pixel-art landscapes, characters, actions, and separate world props. The current milestone still tests whether this one historical camp feels alive before later ages are considered.
 
 ## Run it
 

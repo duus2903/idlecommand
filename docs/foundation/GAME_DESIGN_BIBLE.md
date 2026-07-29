@@ -542,19 +542,20 @@ Progress must feel slow enough that places and people become familiar before the
 
 ### Possible ages
 
-1. Camp Age
-2. Pioneer Age
-3. Settlement Age
-4. Exploration Age
-5. Industrial Age
-6. Electric / Modern Age
-7. Future Age
+1. Neolithic / Farming Stone Age
+2. Bronze Age
+3. Iron Age
+4. Viking Age
+5. Medieval Age
+6. Early Modern / Industrial Age
+7. Electric / Modern Age
+8. Future Age
 
-These names and boundaries remain provisional beyond Camp Age.
+These names and boundaries remain provisional beyond the Neolithic age. Each age must accumulate visible history instead of replacing the world that came before it.
 
 ### First release scope
 
-Only Camp Age is currently approved for active development.
+Only the Nordic Neolithic camp is currently approved for active development.
 
 Future ages are vision, not committed production scope.
 
@@ -603,7 +604,7 @@ The first world contains only:
 - Otto
 - one dog
 - one campfire
-- one tent
+- one small hide-and-reed shelter
 - a small natural landscape
 
 They can:
@@ -612,7 +613,8 @@ They can:
 - rest
 - sleep
 - eat
-- gather branches
+- gather branches, dry grass, and birch-bark tinder
+- kindle fire with flint and pyrite
 - talk or sit together
 - seek shelter from rain
 - look at the night sky

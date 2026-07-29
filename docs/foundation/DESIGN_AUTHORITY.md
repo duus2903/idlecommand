@@ -52,9 +52,9 @@ Performance, motion, sound, timing, density, and interaction must support long-r
 
 Development should accumulate visible and recorded history rather than repeatedly wiping the world clean.
 
-### 10. Camp Age is the only active age
+### 10. The Neolithic camp is the only active age
 
-No later era may expand production scope until Milestone 0.0.1 proves that the tiny camp is compelling on its own.
+IdleCommand may eventually move through historical ages, but no later era may expand production scope until Milestone 0.0.1 proves that the Nordic Neolithic camp is compelling on its own.
 
 ### 11. Build the simulation before the spectacle
 

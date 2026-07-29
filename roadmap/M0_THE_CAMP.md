@@ -9,7 +9,7 @@ Prove that the smallest possible IdleCommand world can feel alive, comforting, a
 - Nora
 - Otto
 - one dog
-- one tent
+- one small Nordic Neolithic hide-and-reed shelter
 - one campfire
 - a narrow natural landscape
 - day and night
@@ -24,7 +24,8 @@ Prove that the smallest possible IdleCommand world can feel alive, comforting, a
 - sit
 - sleep
 - eat
-- gather branches
+- gather branches and dry tinder
+- kindle fire with flint and pyrite
 - warm themselves by the fire
 - seek cover from rain
 - spend time together
@@ -103,7 +104,7 @@ Minimum conceptual systems:
 2. World clock and day/night
 3. Character movement between locations
 4. Behaviour selection
-5. Tent, fire, food, branch and sleep interactions
+5. Shelter, tinder, flint-and-pyrite fire, food, branch and sleep interactions
 6. Dog behaviour
 7. Rain and shelter response
 8. Persistence
