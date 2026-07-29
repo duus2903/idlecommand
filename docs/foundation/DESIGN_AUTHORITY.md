@@ -76,6 +76,10 @@ The vision is incompatible with paid speed-ups, energy systems, manipulative wai
 
 A feature should improve what the player can notice, understand, feel, or remember during a brief glance.
 
+### 16. Nothing important appears without a history
+
+Every significant object, structure, place, and technique must enter the world through observable discovery, gathering, transformation, teaching, construction, or inheritance. Interactive nature must be represented by persistent world assets rather than painted scenery. Intermediate stages and consequences remain visible whenever practical.
+
 ## Feature approval test
 
 Before implementation, answer:
@@ -87,6 +91,7 @@ Before implementation, answer:
 5. Does it create observable consequences or meaningful history?
 6. Does it support calm rather than demand attention?
 7. Is it necessary for the current milestone?
+8. Can the player understand where it came from and what changed because of it?
 
 A feature that fails questions 2, 3, 4, or 6 should normally be rejected or redesigned.
 

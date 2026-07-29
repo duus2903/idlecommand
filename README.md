@@ -43,6 +43,7 @@ The project's source of truth lives in [`docs/foundation`](docs/foundation):
 
 - [Game Design Bible](docs/foundation/GAME_DESIGN_BIBLE.md)
 - [Design Authority](docs/foundation/DESIGN_AUTHORITY.md)
+- [Causal World & Story Engine Plan](docs/foundation/CAUSAL_WORLD_STORY_ENGINE_PLAN.md)
 - [Milestone 0.0.1 — The Camp](roadmap/M0_THE_CAMP.md)
 
 Every feature, asset, system, and technical decision must be evaluated against these documents.
